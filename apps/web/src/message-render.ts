@@ -49,6 +49,20 @@ export function messageBody(
 }
 
 /**
+ * A catalog message as one quiet line, for an expected state inside a section
+ * that already has its own heading, such as an empty one. It carries the same
+ * markers as `messageBody`, without the heading, the eyebrow or the visible code.
+ */
+export function messageNote(ref: SurfaceMessageRef): string {
+  const message = surfaceMessage(ref.code);
+  const nextAction =
+    message.nextAction === null
+      ? ''
+      : ` <span data-message-next-action>${escapeHtml(message.nextAction)}</span>`;
+  return `<p class="message-note" ${messageAttributes(ref)}><strong data-message-sentence>${escapeHtml(message.sentence)}</strong> · <span data-message-detail>${escapeHtml(message.detail)}</span>${nextAction}</p>`;
+}
+
+/**
  * The attributes every rendered catalog treatment carries.
  *
  * **`data-message` is the census marker, and it is deliberately not a role.**

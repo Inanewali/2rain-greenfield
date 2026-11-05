@@ -2742,7 +2742,13 @@ body{padding-bottom:72px}
 .composition-cell-secondary>span{display:block}
 .composition-quantity,.composition-collection td[data-cell-role=quantity]{text-align:right;font-variant-numeric:tabular-nums}
 .composition-description{color:var(--ink-muted);margin:var(--space-2) 0}
-.composition-context-heading,.composition-collection-heading{display:flex;justify-content:space-between;align-items:center;gap:var(--space-3);flex-wrap:wrap}
+.panel-heading{display:flex;justify-content:space-between;align-items:center;gap:var(--space-3);flex-wrap:wrap}
+.panel-heading h2{margin:0}
+.composition-collection[data-resolution=empty]{padding:var(--space-3) var(--space-5)}
+.composition-collection[data-resolution=empty] .panel-heading h2{font-size:var(--text-body)}
+.message-note{margin:var(--space-1) 0 0;color:var(--ink-muted)}
+.composition-empty-fields>summary{min-height:44px;display:flex;align-items:center;cursor:pointer;color:var(--ink-muted)}
+.composition-context-heading{display:flex;justify-content:space-between;align-items:center;gap:var(--space-3);flex-wrap:wrap}
 .composition-local-actions{display:flex;flex-wrap:wrap;gap:var(--space-2)}
 .composition-local-actions>div{flex:1 1 16rem}
 .composition-local-actions p{margin:var(--space-2) 0;color:var(--ink-muted)}

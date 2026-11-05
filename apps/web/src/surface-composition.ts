@@ -38,7 +38,19 @@ import {
   renderChoice,
 } from './control-semantics.js';
 import { operationMessageRef } from './gateway-error-codes.js';
-import { messageAttributes, messageBody } from './message-render.js';
+import {
+  messageAttributes,
+  messageBody,
+  messageNote,
+} from './message-render.js';
+import {
+  disclosure,
+  factGrid,
+  isBlankValue,
+  panel,
+  stack,
+  type Fact,
+} from './record-primitives.js';
 import type { SurfaceMessageCode } from './message-catalog.js';
 const compositionMessage = (
   code: Extract<SurfaceMessageCode, `COMPOSITION_${string}`>,
@@ -914,7 +926,7 @@ function renderPresentedChild(
     child.status === 'failed'
       ? childFailure(child.error)
       : child.status === 'empty'
-        ? compositionMessage('COMPOSITION_CHILD_EMPTY')
+        ? messageNote({ code: 'COMPOSITION_CHILD_EMPTY' })
         : `<div class="data-table-wrap"${definition.presentation?.compact ? ` data-compact="${h(definition.presentation.compact)}" tabindex="0" role="region" aria-label="${h(definition.label)} table; scroll for all columns"` : ''}><table><thead><tr>${displayed.map((column) => `<th scope="col" class="${column.presentation?.role === 'quantity' ? 'composition-quantity' : ''}">${h(column.label)}</th>`).join('')}${detail.length ? '<th scope="col">Details</th>' : ''}${definition.presentation?.selection !== 'none' || rowActions.length ? '<th scope="col">Actions</th>' : ''}</tr></thead><tbody>${child.rows
             .map((row) => {
               const selected =
@@ -958,7 +970,19 @@ function renderPresentedChild(
               }</tr>`;
             })
             .join('')}</tbody></table></div>`;
-  return `<section id="${h(definition.datasetId)}" class="panel data-panel composition-collection" data-composition-dataset="${h(definition.datasetId)}" data-resolution="${child.status}"><div class="composition-collection-heading"><h2>${h(definition.label)}</h2>${definition.presentation?.description ? `<details><summary>About these quantities</summary><p class="composition-description">${h(definition.presentation.description)}</p></details>` : ''}</div>${body}</section>`;
+  return panel({
+    heading: definition.label,
+    aside: definition.presentation?.description
+      ? `<details><summary>About these quantities</summary><p class="composition-description">${h(definition.presentation.description)}</p></details>`
+      : '',
+    body,
+    className: 'data-panel composition-collection',
+    attributes: {
+      id: definition.datasetId,
+      'data-composition-dataset': definition.datasetId,
+      'data-resolution': child.status,
+    },
+  });
 }
 /** The URL of this record's printable document, preserving its scope. */
 export function compositionPrintHref(data: CompositionData): string {
@@ -1065,26 +1089,41 @@ export function renderCompositionFields(
   const place = (columnId: string) =>
     surface.composition!.fields.find((column) => column.columnId === columnId)
       ?.orderKey ?? 0;
-  const cards = [
+  const cards: (Fact & { readonly orderKey: number })[] = [
     ...fields.map((column) => ({
       orderKey: column.orderKey,
-      html: `<div><dt>${h(column.label)}</dt><dd>${h(data.fields.cells[column.columnId] ?? '—')}</dd></div>`,
+      label: column.label,
+      value: data.fields.cells[column.columnId],
     })),
-    ...blocks.map((block) => {
-      const lines = block.columns
+    ...blocks.map((block) => ({
+      orderKey: place(block.columns[0]!),
+      label: block.label,
+      // One compact line on screen; printed documents keep one per line.
+      value: block.columns
         .map((id) => data.fields.cells[id])
-        .filter((value): value is string => !!value && value !== '—');
-      return {
-        orderKey: place(block.columns[0]!),
-        // One compact line on screen; printed documents keep one per line.
-        html: `<div data-composition-block><dt>${h(block.label)}</dt><dd>${lines.length ? lines.map((line) => h(line)).join(', ') : '—'}</dd></div>`,
-      };
-    }),
+        .filter((value) => !isBlankValue(value))
+        .join(', '),
+      attributes: { 'data-composition-block': true },
+    })),
   ].sort((left, right) => left.orderKey - right.orderKey);
+  const filled = cards.filter((card) => !isBlankValue(card.value));
+  const blank = cards.filter((card) => isBlankValue(card.value));
   // Stored fields the header does not carry, read back as saved. Under a
   // declared header the label is already the page's identity, so it is not
-  // repeated as this panel's heading.
-  return `<section class="panel" data-composition-fields><h2>${h(header ? 'Details' : surface.label)}</h2><dl class="record-fields">${cards.map((card) => card.html).join('')}</dl></section>`;
+  // repeated as this panel's heading. Fields with no value stay readable, one
+  // click away, so they do not bury the ones that say something.
+  return panel({
+    heading: header ? 'Details' : surface.label,
+    body: stack(
+      factGrid(filled),
+      disclosure({
+        summary: `Empty fields (${blank.length})`,
+        body: factGrid(blank),
+        className: 'composition-empty-fields',
+      }),
+    ),
+    attributes: { 'data-composition-fields': true },
+  });
 }
 export function renderCompositionChildren(
   data: CompositionData,

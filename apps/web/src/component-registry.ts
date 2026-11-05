@@ -24,6 +24,7 @@ import {
 } from '../../../packages/runtime/src/list-behavior/index.js';
 
 import { escapeHtml, shortIdentity } from './html.js';
+import { actionBar, disclosure } from './record-primitives.js';
 import {
   renderReceivingSection,
   renderReceivingNavigation,
@@ -986,9 +987,17 @@ function renderCommandBar(context: SurfaceComponentContext): string {
   // Progressive record actions disclose what the record offers; a record that
   // offers none -- the period lock, whose commands are its composition's --
   // shows no empty disclosure.
+  const commandBar =
+    context.surface.composition?.presentation?.recordActions === 'progressive'
+      ? disclosure({
+          summary: 'Record actions',
+          body: actionBar({ actions: [actions], label: 'Record commands' }),
+          className: 'composition-record-actions',
+        })
+      : `<div class="command-bar" aria-label="Record commands">${actions}</div>`;
   return slotPanel(
     context,
-    `${compositionActions}${context.surface.composition?.presentation?.recordActions === 'progressive' ? (actions ? `<details class="composition-record-actions"><summary>Record actions</summary><div class="command-bar" aria-label="Record commands">${actions}</div></details>` : '') : `<div class="command-bar" aria-label="Record commands">${actions}</div>`}`,
+    `${compositionActions}${commandBar}`,
     'command-bar-slot',
   );
 }
