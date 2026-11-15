@@ -461,7 +461,48 @@ export class SurfaceProjectionError extends Error {
  * catalog alone, and `submitSurfaceRuntimeIntent` may only pick a member of
  * it.
  */
+/**
+ * A surface's binding is a pure function of the pinned view and the compiled
+ * surface, and both are fixed for as long as either object lives. One page
+ * reads the same bindings many times (each navigation entry, breadcrumb,
+ * picker and related surface asks again), and each read re-validates the
+ * whole pinned operation catalog -- most of a page's server time before this
+ * cache. A refusal is remembered too, so it is thrown the same way every time.
+ */
+const bindingCache = new WeakMap<
+  RuntimeViewContract.RequestRuntimeView,
+  WeakMap<
+    CompiledSurfaceDefinition,
+    | { readonly binding: CompiledSurfaceDataBinding }
+    | { readonly error: unknown }
+  >
+>();
+
 export function readCompiledSurfaceDataBinding(
+  view: RuntimeViewContract.RequestRuntimeView,
+  surface: CompiledSurfaceDefinition,
+): CompiledSurfaceDataBinding {
+  let bySurface = bindingCache.get(view);
+  if (!bySurface) {
+    bySurface = new WeakMap();
+    bindingCache.set(view, bySurface);
+  }
+  const cached = bySurface.get(surface);
+  if (cached) {
+    if ('error' in cached) throw cached.error;
+    return cached.binding;
+  }
+  try {
+    const binding = bindSurfaceData(view, surface);
+    bySurface.set(surface, { binding });
+    return binding;
+  } catch (error) {
+    bySurface.set(surface, { error });
+    throw error;
+  }
+}
+
+function bindSurfaceData(
   view: RuntimeViewContract.RequestRuntimeView,
   surface: CompiledSurfaceDefinition,
 ): CompiledSurfaceDataBinding {
