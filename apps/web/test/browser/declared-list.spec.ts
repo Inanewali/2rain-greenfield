@@ -38,12 +38,10 @@ test('a declared Sales List navigates views, search, sort, filters, pages and ex
     await expect(
       views.getByRole('link', { name: `Draft ${expected.draft}` }),
     ).toBeVisible();
-    await expect(
-      views.getByRole('link', { name: `Released ${expected.released}` }),
-    ).toBeVisible();
-    await expect(
-      views.getByRole('link', { name: `Cancelled ${expected.cancelled}` }),
-    ).toBeVisible();
+    // Stage tabs (ORDER-STAGES): the List's orders carry no lines, so none
+    // is left to ship, and none is closed.
+    await expect(views.getByRole('link', { name: 'To ship 0' })).toBeVisible();
+    await expect(views.getByRole('link', { name: 'Closed 0' })).toBeVisible();
     await expect(page.getByText(`${ORDERS} matching records`)).toBeVisible();
     await expect(page.getByText('Page 1 of 2')).toBeVisible();
     await page.screenshot({
@@ -162,10 +160,10 @@ test('a declared List works without JavaScript', async ({ browser }) => {
     await page.goto(url);
     await page
       .getByRole('navigation', { name: 'Views' })
-      .getByRole('link', { name: /^Released/ })
+      .getByRole('link', { name: /^Draft/ })
       .click();
     await expect(
-      page.getByText(`${expected.released} matching records`),
+      page.getByText(`${expected.draft} matching records`),
     ).toBeVisible();
     await page
       .getByLabel('Sort by', { exact: true })
