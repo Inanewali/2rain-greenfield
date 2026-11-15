@@ -38,6 +38,7 @@ const paths = Object.freeze({
   documentEditor: 'apps/web/src/document-editor.ts',
   editorControls: 'apps/web/src/editor-controls.ts',
   plan: 'docs/greenfield-north-star-erp-platform-plan.md',
+  recordPrimitives: 'apps/web/src/record-primitives.ts',
   skill: '.agents/skills/ux-grammar/SKILL.md',
   surfaceContract: 'apps/web/src/surface-contract.ts',
   surfaceComposition: 'apps/web/src/surface-composition.ts',
@@ -625,6 +626,10 @@ function scanForBypass(
     paths.documentEditor,
     // The editor's own typed controls, consumed only by the generic editor.
     paths.editorControls,
+    // The pieces a Record page is stacked from (panel, fact grid,
+    // disclosure, action bar), consumed only by the composition interpreter
+    // and the closed registry.
+    paths.recordPrimitives,
     // Choice, default and decimal semantics shared by the editor's controls
     // and the composition interpreter's Task inputs, so neither re-implements them.
     paths.controlSemantics,
@@ -688,6 +693,17 @@ function scanForBypass(
       );
     // The editor's controls are part of the generic editor delegate, not a
     // second surface authority: nothing but that editor may render them.
+    if (
+      repoPath !== paths.surfaceComposition &&
+      repoPath !== paths.componentRegistry &&
+      /from ['"][^'"]*record-primitives\.js['"]/.test(source)
+    )
+      add(
+        violations,
+        repoPath,
+        'SURF001_RUNTIME_BYPASS',
+        'only the composition interpreter and its closed registry may stack Record page primitives',
+      );
     if (
       repoPath !== paths.documentEditor &&
       /from ['"][^'"]*editor-controls\.js['"]/.test(source)

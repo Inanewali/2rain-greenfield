@@ -21,9 +21,10 @@ test('panel renders its heading, aside, body and attributes', () => {
       aside: '<a>Help</a>',
       body: '<p>Body</p>',
       className: 'data-panel',
-      attributes: { id: 'lines', 'data-empty': true, hidden: false },
+      id: 'lines',
+      attributes: { 'data-empty': true, hidden: false },
     }),
-    '<section class="panel data-panel" id="lines" data-empty><div class="panel-heading"><h2>Order lines</h2><a>Help</a></div><p>Body</p></section>',
+    '<section id="lines" class="panel data-panel" data-empty><div class="panel-heading"><h2>Order lines</h2><a>Help</a></div><p>Body</p></section>',
   );
 });
 

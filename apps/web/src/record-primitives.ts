@@ -41,6 +41,8 @@ export interface PanelInput {
   readonly body: Html;
   /** Added to the base `panel` class. */
   readonly className?: string;
+  /** Rendered first, so the section reads `<section id="…"` as a link target. */
+  readonly id?: string;
   readonly attributes?: Attributes;
 }
 
@@ -51,9 +53,10 @@ export function panel({
   body,
   className,
   heading,
+  id,
 }: PanelInput): Html {
   const classes = ['panel', className].filter(Boolean).join(' ');
-  return `<section${renderAttributes({ class: classes, ...attributes })}><div class="panel-heading"><h2>${escapeHtml(heading)}</h2>${aside ?? ''}</div>${body}</section>`;
+  return `<section${renderAttributes({ id, class: classes, ...attributes })}><div class="panel-heading"><h2>${escapeHtml(heading)}</h2>${aside ?? ''}</div>${body}</section>`;
 }
 
 export interface Fact {

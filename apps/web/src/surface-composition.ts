@@ -977,8 +977,8 @@ function renderPresentedChild(
       : '',
     body,
     className: 'data-panel composition-collection',
+    id: definition.datasetId,
     attributes: {
-      id: definition.datasetId,
       'data-composition-dataset': definition.datasetId,
       'data-resolution': child.status,
     },
