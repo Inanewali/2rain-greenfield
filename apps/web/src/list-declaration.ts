@@ -161,6 +161,12 @@ interface ListArgumentOptions {
    * way, and neither can it without the progress the supply extends.
    */
   readonly withoutSupply?: boolean;
+  /**
+   * The List's figures withheld by current policy (ORDER-STAGES,
+   * `whenDenied: 'omit'`): the request carries none, so their columns read
+   * "—". A view that keeps one of their bands cannot be asked this way.
+   */
+  readonly withoutFigures?: boolean;
 }
 
 const DAY_MILLISECONDS = 86_400_000;
@@ -442,11 +448,28 @@ function figuresArgument(
                   fieldId: entry.related.quantity,
                   queryId: entry.related.query.targetId,
                   relationId: entry.related.relation,
+                  // Only related rows whose parent holds a value
+                  // (ORDER-STAGES).
+                  ...(entry.related.within
+                    ? {
+                        within: Object.freeze({
+                          fieldId: entry.related.within.field,
+                          queryId: entry.related.within.query.targetId,
+                          relationId: entry.related.within.relation,
+                          values: Object.freeze([
+                            ...entry.related.within.values,
+                          ]),
+                        }),
+                      }
+                    : {}),
                 }),
               }
             : {}),
           rows: Object.freeze({
-            matchFieldId: entry.rows.match,
+            // By a text field, or through the rows' relation (ORDER-STAGES).
+            ...('relation' in entry.rows
+              ? { matchRelationId: entry.rows.relation }
+              : { matchFieldId: entry.rows.match }),
             queryId: entry.rows.query.targetId,
             ...(entry.rows.quantity
               ? { quantityFieldId: entry.rows.quantity }
@@ -573,7 +596,13 @@ export function declaredListArguments(
       );
   // Figures ride every request too: a count, a page and an export read the
   // same figures, and a view's band narrows all three in the statement.
-  const figures = figuresArgument(list, view?.band);
+  // Supplementary figures withheld by policy (ORDER-STAGES) are left out, and
+  // a view keeping one of their bands is never read without them.
+  if (options.withoutFigures && view?.band)
+    throw new Error('a band view is never read without its figures');
+  const figures = options.withoutFigures
+    ? undefined
+    : figuresArgument(list, view?.band);
   const beforeFilters = Object.freeze(
     view?.before
       ? [
@@ -851,6 +880,60 @@ export function withheldSupplyQuery(
       sum.rows.query.targetId,
       ...(sum.within ? [sum.within.query.targetId] : []),
       ...(sum.related ? [sum.related.query.targetId] : []),
+    ]),
+  ];
+  return read.includes(error.queryId) ? error.queryId : null;
+}
+
+/**
+ * Whether a view can be read only with the List's figures: it keeps one of
+ * their bands, which only the list statement can judge (ORDER-STAGES).
+ */
+export function viewNeedsFigures(
+  list: SurfaceList,
+  viewId: string | null,
+): boolean {
+  return (
+    list.views.find((candidate) => candidate.viewId === viewId)?.band !==
+    undefined
+  );
+}
+
+/**
+ * The figure query current policy withheld from a List whose figures are
+ * supplementary (`whenDenied: 'omit'`, ORDER-STAGES), named by the gateway's
+ * refusal; `null` for anything else -- the List's own query, its progress, a
+ * label, or figures that are the List's purpose.
+ */
+export function withheldFiguresQuery(
+  list: SurfaceList,
+  error: unknown,
+): string | null {
+  const figures = list.figures;
+  if (
+    figures?.whenDenied !== 'omit' ||
+    !(error instanceof SemanticQueryPolicyDeniedError)
+  )
+    return null;
+  const read: readonly string[] = [
+    ...figures.sums.flatMap((sum) => [
+      sum.rows.query.targetId,
+      ...(sum.within ? [sum.within.query.targetId] : []),
+      ...(sum.related ? [sum.related.query.targetId] : []),
+      ...(sum.related?.within ? [sum.related.within.query.targetId] : []),
+    ]),
+    ...(figures.choices ?? []).flatMap((choice) =>
+      [...choice.cases.map((entry) => entry.value), choice.otherwise].flatMap(
+        (value) =>
+          value && 'percent' in value
+            ? [value.percent.company.query.targetId]
+            : [],
+      ),
+    ),
+    ...(figures.latest ?? []).flatMap((latest) => [
+      latest.rows.query.targetId,
+      latest.within.query.targetId,
+      latest.label.query.targetId,
     ]),
   ];
   return read.includes(error.queryId) ? error.queryId : null;

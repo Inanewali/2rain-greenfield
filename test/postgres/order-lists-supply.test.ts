@@ -284,10 +284,11 @@ test(
         [view('blocked')]: released.filter((row) => row.short > 0n).length,
         [view('reserved')]: released.filter((row) => row.covered > 0n).length,
         [view('draft')]: truth.filter((row) => row.state === 'draft').length,
-        [view('released')]: released.length,
+        // ORDER-STAGES: the part-shipped order's shipped units are on no
+        // invoice, and nothing is invoiced here, so nothing is owed.
+        [view('to_invoice')]: 1,
+        [view('to_collect')]: 0,
         [view('closed')]: truth.filter((row) => row.state === 'closed').length,
-        [view('cancelled')]: truth.filter((row) => row.state === 'cancelled')
-          .length,
       };
       assert.deepEqual(
         [expected[view('blocked')], expected[view('reserved')]],
@@ -336,7 +337,7 @@ test(
           .split('\r\n');
         assert.equal(
           csv[0],
-          'Number,Customer,Salesperson,Order date,Requested,Status,Ordered,Shipped,Open,Short,Currency',
+          'Number,Customer,Salesperson,Order date,Requested,Status,Ordered,Shipped,Open,Short,To invoice,Balance due,Currency',
         );
         assert.equal(csv.length - 1, kept.length, local);
       }

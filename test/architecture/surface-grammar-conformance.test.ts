@@ -324,11 +324,15 @@ test('compiled navigation stays flat within budget and groups mounted modules be
   // (SUPPLY-WARNINGS) require 21; ranked editor defaults
   // (SALES-EXTRAS' price lists) and Tasks of more than five steps whose
   // per-row steps read their own row's read-backs (its counter sales)
-  // require 22 (SALES-EXTRAS numbered it 15 in parallel; INTEGRATION).
-  assert.equal(groupedManifest.requiredRuntimeCapability.minimumVersion, 22);
-  // Each half of 22 holds it alone: without the price lists' tiers the
-  // counter sale's Tasks still require it; without both, the floor is 21.
-  const floorWithout = (counterSales: boolean) => {
+  // require 22 (SALES-EXTRAS numbered it 15 in parallel; INTEGRATION); the
+  // Sales orders List's figures beside its progress -- To invoice and To
+  // collect, over its lines and invoices through their relations and only
+  // invoices that count, supplementary (ORDER-STAGES) -- require 23.
+  assert.equal(groupedManifest.requiredRuntimeCapability.minimumVersion, 23);
+  // Without those figures the floor is 22, which each of its halves holds
+  // alone: without the price lists' tiers the counter sale's Tasks still
+  // require it; without both, the floor is 21.
+  const floorWithout = (counterSales: boolean, stages = true) => {
     const source = composedApplicationWithInventory() as {
       surfaces: Array<{
         documentEditor?: Record<
@@ -343,9 +347,25 @@ test('compiled navigation stays flat within budget and groups mounted modules be
           }>
         >;
         composition?: { actions: Array<{ actionId: string }> };
+        list?: {
+          figures?: unknown;
+          progress?: unknown;
+          views: Array<{ band?: unknown }>;
+          columns: Array<{ field: string }>;
+        };
       }>;
     };
     for (const surface of source.surfaces) {
+      // The order-to-cash figures (ORDER-STAGES) go with their tabs and
+      // columns: only a List with a progress carries them.
+      const list = surface.list;
+      if (stages && list?.figures && list.progress) {
+        delete list.figures;
+        list.views = list.views.filter((view) => view.band === undefined);
+        list.columns = list.columns.filter(
+          (column) => !/_list_(?:to_invoice|balance_due)$/u.test(column.field),
+        );
+      }
       const editor = surface.documentEditor;
       if (editor)
         for (const key of ['headerFields', 'lineFields'] as const) {
@@ -372,6 +392,9 @@ test('compiled navigation stays flat within budget and groups mounted modules be
   };
   assert.equal(floorWithout(false), 22);
   assert.equal(floorWithout(true), 21);
+  // The figures alone hold 23: with them kept and both halves of 22 gone,
+  // the floor stays 23.
+  assert.equal(floorWithout(true, false), 23);
   // Workspace owners and setup lists are in navigation; contextual document,
   // fulfillment, line and lookup surfaces remain reachable in their documents
   // and by record/deep link.

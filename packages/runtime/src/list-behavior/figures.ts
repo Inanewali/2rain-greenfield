@@ -43,11 +43,42 @@ export interface SharedListFigureRelated {
 }
 
 /**
+ * A figure sum's rows (ORDER-STAGES): those holding the listed record's id in
+ * a text field, or those pointing at it through one of their relations.
+ */
+export type SharedListFigureSumRows = {
+  readonly queryId: string;
+  readonly quantityFieldId?: string;
+} & (
+  | { readonly matchFieldId: string; readonly matchRelationId?: never }
+  | { readonly matchRelationId: string; readonly matchFieldId?: never }
+);
+
+/**
+ * A figure sum's related rows, optionally only where their own parent --
+ * through their relation to it -- holds a value (ORDER-STAGES).
+ */
+export interface SharedListFigureSumRelated extends SharedListFigureRelated {
+  readonly within?: SharedListFigureWithin & { readonly relationId: string };
+}
+
+/**
  * `rows` adds the rows' quantity, `related` their related rows' quantity and
  * `remaining` each row's quantity less its related rows', never below zero.
  */
 export interface SharedListFigureSum {
   readonly figureId: string;
+  readonly related?: SharedListFigureSumRelated;
+  readonly rows: SharedListFigureSumRows;
+  readonly sum: 'related' | 'remaining' | 'rows';
+  readonly within?: SharedListFigureWithin;
+}
+
+/**
+ * One part of a supply's free stock (SUPPLY-WARNINGS): a sum without an id,
+ * over rows holding an item's id as text, with plain related rows.
+ */
+export interface SharedListPlainSum {
   readonly related?: SharedListFigureRelated;
   readonly rows: SharedListFigureRows;
   readonly sum: 'related' | 'remaining' | 'rows';
@@ -388,10 +419,14 @@ function parseChoiceValue(
 function parseSumParts(
   sum: Readonly<Record<string, ImmutableJsonValue | undefined>>,
 ): Omit<SharedListFigureSum, 'figureId'> {
+  // Rows holding the listed record's id as text, or pointing at it through a
+  // relation (ORDER-STAGES): exactly one.
+  const byRelation =
+    isRecord(sum.rows) && Object.hasOwn(sum.rows, 'matchRelationId');
   const rows = record(
     sum.rows,
     'rows',
-    ['matchFieldId', 'queryId'],
+    [byRelation ? 'matchRelationId' : 'matchFieldId', 'queryId'],
     ['quantityFieldId'],
   );
   if (sum.sum !== 'rows' && sum.sum !== 'related' && sum.sum !== 'remaining')
@@ -404,9 +439,18 @@ function parseSumParts(
   return {
     ...(sum.related === undefined
       ? {}
-      : { related: parseSharedListFigureRelated(sum.related) }),
+      : { related: parseSumRelated(sum.related) }),
     rows: Object.freeze({
-      matchFieldId: canonicalId(rows.matchFieldId, 'rows matchFieldId'),
+      ...(byRelation
+        ? {
+            matchRelationId: canonicalId(
+              rows.matchRelationId,
+              'rows matchRelationId',
+            ),
+          }
+        : {
+            matchFieldId: canonicalId(rows.matchFieldId, 'rows matchFieldId'),
+          }),
       queryId: canonicalId(rows.queryId, 'rows queryId'),
       ...(rows.quantityFieldId === undefined
         ? {}
@@ -439,19 +483,58 @@ export function parseSharedListFigureRelated(
 }
 
 /**
+ * A figure sum's related rows: plain, or only where their own parent holds a
+ * value, reached through their relation to it (ORDER-STAGES).
+ */
+function parseSumRelated(
+  value: ImmutableJsonValue | undefined,
+): SharedListFigureSumRelated {
+  const related = record(
+    value,
+    'related',
+    ['fieldId', 'queryId', 'relationId'],
+    ['within'],
+  );
+  const plain = {
+    fieldId: canonicalId(related.fieldId, 'related fieldId'),
+    queryId: canonicalId(related.queryId, 'related queryId'),
+    relationId: canonicalId(related.relationId, 'related relationId'),
+  };
+  if (related.within === undefined) return Object.freeze(plain);
+  if (
+    isRecord(related.within) &&
+    Object.hasOwn(related.within, 'referenceFieldId')
+  )
+    throw malformed(
+      'list figures related rows reach their parent through a relation',
+    );
+  const parent = parseWithin(related.within);
+  return Object.freeze({
+    ...plain,
+    within: parent as SharedListFigureWithin & { readonly relationId: string },
+  });
+}
+
+/**
  * One part of an item's free stock in a List's supply (SUPPLY-WARNINGS): a
- * sum's parts without an id of its own, with the same closed contract.
+ * sum's parts without an id of its own, with the same closed contract --
+ * rows holding the item's id as text and plain related rows only.
  */
 export function parseSharedListSupplySum(
   value: ImmutableJsonValue | undefined,
-): Omit<SharedListFigureSum, 'figureId'> {
+): SharedListPlainSum {
   const sum = record(
     value,
     'supply sum',
     ['rows', 'sum'],
     ['related', 'within'],
   );
-  return Object.freeze(parseSumParts(sum));
+  const parts = parseSumParts(sum);
+  if (parts.rows.matchFieldId === undefined || parts.related?.within)
+    throw malformed(
+      'list supply sums match rows by a text field and plain related rows',
+    );
+  return Object.freeze(parts as SharedListPlainSum);
 }
 
 /**

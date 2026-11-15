@@ -233,6 +233,14 @@ function receivablesKit(fixture: Fixture) {
     (await reread('commercial_order', orderId)).values[
       `${ns}:metric.order_to_invoice`
     ];
+  // Where the order stands (Order to cash): left to ship, and still owed.
+  const standing = async (orderId: string) => {
+    const values = (await reread('commercial_order', orderId)).values;
+    return [
+      values[`${ns}:metric.order_to_ship`],
+      values[`${ns}:metric.order_balance_due`],
+    ];
+  };
   const figures = (record: SemanticRecordDto) =>
     Object.fromEntries(
       [
@@ -259,6 +267,7 @@ function receivablesKit(fixture: Fixture) {
     settle,
     reread,
     toInvoice,
+    standing,
     figures,
     state,
   };
@@ -279,12 +288,15 @@ test(
         settle,
         reread,
         toInvoice,
+        standing,
         figures,
         state,
       } = receivablesKit(fixture);
 
       const a = await order([{ quantity: '3', price: '12.5' }]);
       const [lineA] = a.lines;
+      // Confirmed: all three left to ship, nothing owed yet.
+      assert.deepEqual(await standing(a.header.recordId), ['3', '0']);
 
       // Nothing is shipped yet, so there is nothing to invoice.
       await assert.rejects(
@@ -295,6 +307,7 @@ test(
       const reservation = await reserve(lineA!.recordId, '3');
       await ship(a.header.recordId, lineA!.recordId, reservation.recordId, '2');
       assert.equal(await toInvoice(a.header.recordId), '2');
+      assert.deepEqual(await standing(a.header.recordId), ['1', '0']);
 
       // 2 × 12.50 less 10% = 22.50, tax 1.125 → 1.13; the order's charges go
       // on its first invoice: freight 25 (+1.25 tax) and an untaxed fee of 10.
@@ -344,6 +357,8 @@ test(
         credited_amount: '0.00',
         balance: '11.81',
       });
+      // Everything shipped; both invoices owe their whole balance.
+      assert.deepEqual(await standing(a.header.recordId), ['0', '71.69']);
 
       // A payment may not exceed the balance, nor be a fraction of a cent.
       await assert.rejects(
@@ -414,10 +429,14 @@ test(
         operate('customer_invoice_void', current),
         refusedWith('RECEIVABLES_INVOICE_SETTLED'),
       );
+      // The first invoice is paid; only the open second one still owes.
+      assert.deepEqual(await standing(a.header.recordId), ['0', '11.81']);
       const voided = await operate('customer_invoice_void', second);
       assert.equal(state(voided, 'customer_invoice'), 'void');
       assert.equal(figures(voided).balance, '0.00');
       assert.equal(await toInvoice(a.header.recordId), '1');
+      // A void invoice owes nothing.
+      assert.deepEqual(await standing(a.header.recordId), ['0', '0']);
       const reinvoiced = await invoice(a.header.recordId);
       assert.deepEqual(
         [figures(reinvoiced).subtotal, figures(reinvoiced).total],
@@ -636,6 +655,79 @@ test(
         balance: '3.78',
       });
       assert.equal(await toInvoice(c.header.recordId), '0');
+    });
+  },
+);
+
+test(
+  'ORDER-STAGES: the Sales orders List keeps an order under To invoice while shipped units are on no invoice that counts, and under To collect while its invoices owe',
+  { timeout: 300_000 },
+  async () => {
+    await withOrderEntryFixture(async (fixture) => {
+      const { operate, order, reserve, ship, invoice, settle, reread } =
+        receivablesKit(fixture);
+      // The order is in a tab when the tab's served page lists it.
+      const inTab = async (orderId: string, local: string) => {
+        const target = new URL(fixture.app.baseUrl);
+        target.searchParams.set('surface', `${ns}:surface.sales_order_list`);
+        target.searchParams.set(
+          `${ns}:parameter.sales_order_list_legal_entity_scope`,
+          fixture.scope,
+        );
+        target.searchParams.set(
+          'view',
+          `${ns}:list_view.sales_order_list_${local}`,
+        );
+        const response = await fetch(target, { redirect: 'manual' });
+        const html = await response.text();
+        assert.equal(response.status, 200, local);
+        assert.doesNotMatch(html, /data-diagnostic-code=/u, local);
+        return html.includes(`data-record-id="${orderId}"`);
+      };
+      // A stored balance as the canonical decimal a payment takes.
+      const canonical = (value: string) =>
+        value.includes('.') ? value.replace(/\.?0+$/u, '') : value;
+      const stages = async (orderId: string) => [
+        await inTab(orderId, 'to_invoice'),
+        await inTab(orderId, 'to_collect'),
+      ];
+
+      const a = await order([{ quantity: '3', price: '12.5' }]);
+      const [line] = a.lines;
+      const orderId = a.header.recordId;
+      // Confirmed, nothing shipped: neither.
+      assert.deepEqual(await stages(orderId), [false, false]);
+      const reservation = await reserve(line!.recordId, '3');
+      await ship(orderId, line!.recordId, reservation.recordId, '2');
+      // Shipped and on no invoice: to invoice.
+      assert.deepEqual(await stages(orderId), [true, false]);
+      const first = await invoice(orderId);
+      // Invoiced and owing: to collect.
+      assert.deepEqual(await stages(orderId), [false, true]);
+      await ship(orderId, line!.recordId, reservation.recordId, '1');
+      const second = await invoice(orderId);
+      assert.deepEqual(await stages(orderId), [false, true]);
+      // A void invoice counts for neither: its unit is to invoice again,
+      // and it owes nothing.
+      await operate('customer_invoice_void', second);
+      assert.deepEqual(await stages(orderId), [true, true]);
+      // Paid in full, with the voided unit still to invoice.
+      const balance = String(
+        (await reread('customer_invoice', first.recordId)).values[
+          `${ns}:field.customer_invoice_balance`
+        ],
+      );
+      await settle('payment', first.recordId, canonical(balance));
+      assert.deepEqual(await stages(orderId), [true, false]);
+      // Invoiced again and paid: in neither.
+      const third = await invoice(orderId);
+      const owed = String(
+        (await reread('customer_invoice', third.recordId)).values[
+          `${ns}:field.customer_invoice_balance`
+        ],
+      );
+      await settle('payment', third.recordId, canonical(owed));
+      assert.deepEqual(await stages(orderId), [false, false]);
     });
   },
 );

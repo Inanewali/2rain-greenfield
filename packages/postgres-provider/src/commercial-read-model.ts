@@ -336,27 +336,27 @@ export const commercialReadModel: SemanticQueryReadModelExecutor = async ({
     }
     return quantityText(open);
   };
+  /** What one sales order line has shipped, net of corrections. */
+  const shippedOf = async (line: SemanticRecordDto) => {
+    const read = await invoke('shipped', {
+      recordId: fulfillmentProjectionIdentity(
+        view,
+        scopeId,
+        'shipped',
+        line.recordId,
+      ),
+      includeArchived: false,
+    });
+    return read.records[0]
+      ? units(
+          read.records[0].values[field('sales_order_shipped_shipped_quantity')],
+        )
+      : 0n;
+  };
   /** Shipped quantity not yet on an invoice that counts (ruling C). */
   const toInvoice = (orderId: string, lines: readonly SemanticRecordDto[]) =>
     toSettle(orderId, lines, {
-      progressOf: async (line) => {
-        const read = await invoke('shipped', {
-          recordId: fulfillmentProjectionIdentity(
-            view,
-            scopeId,
-            'shipped',
-            line.recordId,
-          ),
-          includeArchived: false,
-        });
-        return read.records[0]
-          ? units(
-              read.records[0].values[
-                field('sales_order_shipped_shipped_quantity')
-              ],
-            )
-          : 0n;
-      },
+      progressOf: shippedOf,
       documents: 'invoices',
       documentLines: 'invoiceLines',
       document: 'customer_invoice',
@@ -366,6 +366,62 @@ export const commercialReadModel: SemanticQueryReadModelExecutor = async ({
         lineOrderLine: 'customer_invoice_line_order_line',
       },
     });
+  /**
+   * What a confirmed order has left to ship: its lines' ordered quantity less
+   * what they shipped, as the Sales orders List's To ship tab counts it, and
+   * nothing in any other state. A line or shipped read that cannot be
+   * stated states nothing.
+   */
+  const toShip = async (
+    order: SemanticRecordDto,
+    lines: readonly SemanticRecordDto[],
+  ): Promise<string | null> => {
+    if (
+      order.values[
+        `${ns}:derived_state_field.machine.sales_order_lifecycle`
+      ] !== `${ns}:state.sales_order_released`
+    )
+      return '0';
+    let open = 0n;
+    for (const line of lines) {
+      const ordered = units(
+        line.values[field('sales_order_line_ordered_quantity')],
+      );
+      const shipped = await shippedOf(line);
+      if (ordered === null || shipped === null) return null;
+      open += ordered - shipped;
+    }
+    // Shipped beyond what was ordered leaves nothing to ship, as the To ship
+    // tab, which keeps only orders with something open, reads it.
+    return quantityText(open > 0n ? open : 0n);
+  };
+  /**
+   * What the order's live invoices still owe: the sum of each open or
+   * partially paid invoice's balance. Draft and void invoices owe nothing; a
+   * paid one owes nothing by its state. A live invoice without a stated
+   * balance states nothing.
+   */
+  const balanceDue = async (orderId: string): Promise<string | null> => {
+    const owing = new Set(
+      ['open', 'partially_paid'].map(
+        (state) => `${ns}:option.customer_invoice_state_${state}`,
+      ),
+    );
+    let due = 0n;
+    for (const invoice of await listAll(
+      'invoices',
+      `${ns}:relation.customer_invoice_order`,
+      orderId,
+      'referenceScope',
+    )) {
+      if (!owing.has(String(invoice.values[field('customer_invoice_state')])))
+        continue;
+      const balance = units(invoice.values[field('customer_invoice_balance')]);
+      if (balance === null) return null;
+      if (balance > 0n) due += balance;
+    }
+    return quantityText(due);
+  };
   /**
    * Received quantity not yet on a live vendor bill (PAYABLES), from the
    * receiving projection. A withheld read of what was received or billed
@@ -635,6 +691,10 @@ export const commercialReadModel: SemanticQueryReadModelExecutor = async ({
           'order_to_invoice',
           lines === null ? null : await toInvoice(row.recordId, lines),
         );
+      if (model.resultFields.order_to_ship)
+        emit('order_to_ship', lines === null ? null : await toShip(row, lines));
+      if (model.resultFields.order_balance_due)
+        emit('order_balance_due', await balanceDue(row.recordId));
       if (model.resultFields.order_to_bill)
         emit(
           'order_to_bill',

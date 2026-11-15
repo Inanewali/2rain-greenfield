@@ -146,8 +146,9 @@ test('the composed application declares its Lists and they normalize unchanged',
     ) as unknown as Declared;
     assert.equal(order.dataSource.targetId, dataSource);
     assert.equal(order.list.progress?.whenDenied, 'omit');
-    assert.equal(order.list.views[1]?.label, work);
-    assert.equal(order.list.views[1]?.open, true);
+    // The work tab leads the views that need the progress.
+    const workView = order.list.views.find((value) => value.open);
+    assert.equal(workView?.label, work);
     assert.deepEqual(
       order.list.rowActions
         ?.filter((value) => value.when?.supply === undefined)
@@ -167,22 +168,39 @@ test('the composed application declares its Lists and they normalize unchanged',
     (surface) => surface.surfaceId === salesList,
   ) as unknown as Declared;
   assert.equal(salesOrders.list.progress?.supply?.whenDenied, 'omit');
+  // ORDER-STAGES: the order-to-cash tabs in the order an order moves
+  // through them, each keeping one band of the List's own figures beside its
+  // progress; Released is what they divide, and a cancelled order stays under
+  // All, as the reference keeps it.
+  const band = (local: string) => `${ns}:list_output.sales_order_list_${local}`;
   assert.deepEqual(
-    salesOrders.list.views.map((view) => [view.label, view.supply ?? null]),
+    (
+      salesOrders.list.views as unknown as Array<{
+        label: string;
+        supply?: string;
+        band?: { figure: string; values: string[] };
+      }>
+    ).map((view) => [view.label, view.supply ?? view.band?.values[0] ?? null]),
     [
       ['All', null],
+      ['Draft', null],
       ['To ship', null],
       ['Blocked by supply', 'short'],
       ['Reserved', 'covered'],
-      ['Draft', null],
-      ['Released', null],
+      ['To invoice', band('invoicing_open')],
+      ['To collect', band('collection_owing')],
       ['Closed', null],
-      ['Cancelled', null],
     ],
   );
   assert.deepEqual(
-    salesOrders.list.columns.map((column) => column.label).slice(-3),
-    ['Open', 'Short', 'Currency'],
+    salesOrders.list.columns.map((column) => column.label).slice(-5),
+    ['Open', 'Short', 'To invoice', 'Balance due', 'Currency'],
+  );
+  // Supplementary, like the progress: a denied invoice read leaves the List.
+  assert.equal(
+    (salesOrders.list as { figures?: { whenDenied?: string } }).figures
+      ?.whenDenied,
+    'omit',
   );
   // SALES-EXTRAS (INTEGRATION, decision I-M8(a)): Counter sales is a
   // worklist over its own clone of the Sales orders query -- the same
@@ -1538,13 +1556,37 @@ test('List figures and band views are refused for each misuse the runtime cannot
           column(app, 'reserved').field = sum(app, 'on_hand').figureId;
         },
       ],
+      // ORDER-STAGES: figures sit beside a progress (the Sales orders List),
+      // over rows pointing at the order through their own relation and
+      // related rows whose own parent holds a value.
       [
-        'a List declares progress or figures, not both',
+        "a figure's rows point at the listed record through a relation",
         (app) => {
-          // Expected receipts keeps its progress and gains the item figures.
-          listOf(app, expectedList).list.figures = structuredClone(
-            figures(app),
-          );
+          // The invoices' balance read through their lines' relation.
+          const owed = figures(app, salesList).sums.find((value) =>
+            value.figureId.endsWith('_balance_due'),
+          )! as unknown as { rows: { relation: string } };
+          owed.rows.relation = `${ns}:relation.customer_invoice_line_invoice`;
+        },
+      ],
+      [
+        "a figure's parent is its rows' parent through a relation",
+        (app) => {
+          // Invoice lines reaching their invoice through the invoice's own
+          // relation to the order.
+          const invoiced = figures(app, salesList).sums.find((value) =>
+            value.figureId.endsWith('_invoiced_units'),
+          )! as unknown as { related: { within: { relation: string } } };
+          invoiced.related.within.relation = `${ns}:relation.customer_invoice_order`;
+        },
+      ],
+      [
+        'a List that omits denied figures keeps a view that does not need them',
+        (app) => {
+          const list = listOf(app, salesList).list as {
+            views: Array<{ band?: unknown }>;
+          };
+          list.views = list.views.filter((view) => view.band !== undefined);
         },
       ],
       [

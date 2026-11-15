@@ -28,7 +28,7 @@ test('normal shared order workspace creates, edits, removes, saves and reopens S
           // Sales confirms (ruling F) once a ship-to is complete; Purchasing releases.
           const boundary = await page
             .getByText(
-              /^Save commits the header and each line in sequence\. Drafts do not change stock\. (Confirm is a separate action, offered once the order has a complete ship-to address \(street, city, postal code and country\)|Place order is a separate action)\.$/u,
+              /^(Drafts do not change stock\. To confirm, the order needs a complete ship-to address: street, city, postal code and country|Save commits the header and each line in sequence\. Drafts do not change stock\. Place order is a separate action)\.$/u,
             )
             .boundingBox();
           const save = await page

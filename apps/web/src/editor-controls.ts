@@ -208,7 +208,9 @@ export function renderValueControl(context: RenderContext): string {
       (DECIMAL_KINDS.includes(input.kind)
         ? (canonicalDecimal(raw) ?? raw)
         : raw);
-    return `<output id="${h(id)}" class="derived-value" data-derived-from="${h(presentation.referenceFieldId)}"${named}>${shown ? h(shown) : row.values[presentation.referenceFieldId] ? '<span class="derived-empty">—</span>' : '<span class="derived-empty">Select a product</span>'}</output>`;
+    // Nothing derived yet reads as a dash. The source may be a product, a tax
+    // code or a fee, so naming it here would be wrong somewhere.
+    return `<output id="${h(id)}" class="derived-value" data-derived-from="${h(presentation.referenceFieldId)}"${named}>${shown ? h(shown) : '<span class="derived-empty">—</span>'}</output>`;
   }
   if (input.kind === 'dateTimeFieldType') {
     // Kept deliberately: an explicit-UTC native picker with second precision,

@@ -609,9 +609,20 @@ export function validateSurfaceLists(
     // Every figure names what the statement joins by compiled identity: list
     // queries the gateway authorizes per request, fields they select, and the
     // relations between their entities. Anything else is refused here.
+    // Figures sit beside a declared progress (ORDER-STAGES): the statement
+    // computes each in its own lateral, and their ids never collide.
     const validateFigures = (figures: SurfaceListFigures) => {
-      if (list.progress)
-        fail(id, 'a List declares progress or figures, not both');
+      // Supplementary figures serve every view that keeps none of their
+      // bands; a List whose every view keeps one would serve nothing.
+      if (
+        figures.whenDenied === 'omit' &&
+        list.views.length > 0 &&
+        list.views.every((view) => view.band)
+      )
+        fail(
+          id,
+          'a List that omits denied figures keeps a view that does not need them',
+        );
       const declared = [...figureKinds.keys()];
       unique(
         [
@@ -653,9 +664,30 @@ export function validateSurfaceLists(
           );
         return source;
       };
+      // Rows pointing at the listed record through one of their own relations
+      // (ORDER-STAGES), as an order's lines and invoices point at their order.
+      const pointing = (rows: {
+        query: { targetId: string };
+        relation: string;
+      }) => {
+        const source = read(rows.query.targetId);
+        const relation = relations.get(rows.relation);
+        if (
+          !relation ||
+          relation.lifecycle !== 'active' ||
+          relation.sourceEntity.targetId !== source.sourceEntity.targetId ||
+          relation.targetEntity.targetId !== query.sourceEntity.targetId
+        )
+          fail(
+            id,
+            "a figure's rows point at the listed record through a relation",
+          );
+        return source;
+      };
       const numbers = new Set<string>();
       for (const sum of figures.sums) {
-        const rows = matched(sum.rows);
+        const rows =
+          'relation' in sum.rows ? pointing(sum.rows) : matched(sum.rows);
         // `rows` adds a quantity, `related` related rows, `remaining` both.
         const quantity = sum.sum !== 'related';
         const related = sum.sum !== 'rows';
@@ -667,19 +699,22 @@ export function validateSurfaceLists(
         if (sum.rows.quantity !== undefined) decimal(rows, sum.rows.quantity);
         if (sum.within) parentOf(rows, sum.within);
         if (sum.related) {
-          const pointing = read(sum.related.query.targetId);
+          const toRows = read(sum.related.query.targetId);
           const relation = relations.get(sum.related.relation);
           if (
             !relation ||
             relation.lifecycle !== 'active' ||
-            relation.sourceEntity.targetId !== pointing.sourceEntity.targetId ||
+            relation.sourceEntity.targetId !== toRows.sourceEntity.targetId ||
             relation.targetEntity.targetId !== rows.sourceEntity.targetId
           )
             fail(
               id,
               "a figure's related rows point at its rows through a relation",
             );
-          decimal(pointing, sum.related.quantity);
+          decimal(toRows, sum.related.quantity);
+          // Only related rows whose own parent holds a kept value, as only
+          // the lines of invoices that count (ORDER-STAGES).
+          if (sum.related.within) parentOf(toRows, sum.related.within);
         }
         numbers.add(sum.figureId);
       }

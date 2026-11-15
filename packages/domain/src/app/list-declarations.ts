@@ -163,15 +163,35 @@ type ListFigureChoiceValueSpec =
       };
     };
 
+/**
+ * A figure sum's rows (ORDER-STAGES): holding the listed record's id as text,
+ * or pointing at it through one of their relations, as an order's lines and
+ * invoices point at their order.
+ */
+type ListFigureSumRowsSpec =
+  | ListFigureRowsSpec
+  | {
+      readonly query: string;
+      readonly relation: string;
+      readonly quantity?: string;
+    };
+
 interface ListFiguresSpec {
   readonly sums: readonly {
     readonly figureId: string;
-    readonly rows: ListFigureRowsSpec;
+    readonly rows: ListFigureSumRowsSpec;
     readonly within?: ListFigureWithinSpec;
     readonly related?: {
       readonly query: string;
       readonly relation: string;
       readonly quantity: string;
+      /** Only where their own parent holds a value (ORDER-STAGES). */
+      readonly within?: {
+        readonly relation: string;
+        readonly query: string;
+        readonly field: string;
+        readonly values: readonly string[];
+      };
     };
     readonly sum: 'rows' | 'related' | 'remaining';
   }[];
@@ -215,6 +235,8 @@ interface ListFiguresSpec {
     readonly value: string;
     readonly label: { readonly query: string; readonly field: string };
   }[];
+  /** Supplementary: read without when policy denies them (ORDER-STAGES). */
+  readonly whenDenied?: 'omit';
 }
 
 /** A view or row action keeping rows with something covered or short. */
@@ -1613,10 +1635,172 @@ function renamed(
 
 /**
  * The Sales orders List: its work tabs (ORDER-PARITY), its supply tabs
- * (SUPPLY-WARNINGS) and the lifecycle tabs -- eight saved views, the most
- * the language admits.
+ * (SUPPLY-WARNINGS), its order-to-cash tabs (ORDER-STAGES) and Draft and
+ * Closed -- eight saved views, the most the language admits. Released is
+ * what To ship, To invoice and To collect divide between them, and a
+ * cancelled order stays under All, as the reference keeps it.
  */
 function salesOrderList(namespace: string): ListSpec {
+  const base = salesOrderWork(namespace);
+  const output = (local: string) =>
+    `${namespace}:list_output.sales_order_list_${local}`;
+  const view = (local: string) => {
+    const found = base.views.find((entry) => entry.local === local);
+    if (!found) throw new Error(`Sales orders List has no ${local} view`);
+    return found;
+  };
+  const currency = base.columns.findIndex(
+    (column) => column.local === 'currency',
+  );
+  return {
+    ...base,
+    columns: [
+      ...base.columns.slice(0, currency),
+      // Computed by the statement: shown and exported, never sorted.
+      {
+        local: 'to_invoice',
+        label: 'To invoice',
+        field: output('to_invoice'),
+        sortable: false,
+      },
+      {
+        local: 'balance_due',
+        label: 'Balance due',
+        field: output('balance_due'),
+        sortable: false,
+      },
+      ...base.columns.slice(currency),
+    ],
+    views: [
+      view('all'),
+      view('draft'),
+      view('to_ship'),
+      view('blocked'),
+      view('reserved'),
+      {
+        local: 'to_invoice',
+        label: 'To invoice',
+        filters: {},
+        band: {
+          figure: output('invoicing'),
+          values: [output('invoicing_open')],
+        },
+      },
+      {
+        local: 'to_collect',
+        label: 'To collect',
+        filters: {},
+        band: {
+          figure: output('collection'),
+          values: [output('collection_owing')],
+        },
+      },
+      view('closed'),
+    ],
+    figures: salesStages(namespace),
+  };
+}
+
+/**
+ * Where each order stands after shipping (ORDER-STAGES), computed by the
+ * list statement so a tab counts, pages and exports exactly its rows:
+ * shipped units not yet on an invoice that counts -- open, partially paid
+ * or paid, never a draft or void one -- and what the order's invoices still
+ * owe. A void or paid invoice holds a balance of 0 and a draft none, so
+ * every invoice's balance is added. Supplementary: a principal denied one of
+ * these reads still gets the List, without To invoice and To collect.
+ */
+function salesStages(namespace: string): ListFiguresSpec {
+  const query = (local: string) => `${namespace}:query.${local}`;
+  const relation = (local: string) => `${namespace}:relation.${local}`;
+  const field = (local: string) => `${namespace}:field.${local}`;
+  const output = (local: string) =>
+    `${namespace}:list_output.sales_order_list_${local}`;
+  // The order's lines, through their own relation to it.
+  const lines = {
+    query: query('commercial_lines'),
+    relation: relation('sales_order_line_order'),
+  };
+  return {
+    sums: [
+      {
+        figureId: output('shipped_units'),
+        rows: lines,
+        related: {
+          query: query('sales_order_shipped_list'),
+          relation: relation('sales_order_shipped_order_line'),
+          quantity: field('sales_order_shipped_shipped_quantity'),
+        },
+        sum: 'related',
+      },
+      {
+        figureId: output('invoiced_units'),
+        rows: lines,
+        related: {
+          query: query('customer_invoice_line_list'),
+          relation: relation('customer_invoice_line_order_line'),
+          quantity: field('customer_invoice_line_quantity'),
+          within: {
+            relation: relation('customer_invoice_line_invoice'),
+            query: query('customer_invoice_list'),
+            field: field('customer_invoice_state'),
+            values: ['open', 'partially_paid', 'paid'].map(
+              (state) => `${namespace}:option.customer_invoice_state_${state}`,
+            ),
+          },
+        },
+        sum: 'related',
+      },
+      {
+        figureId: output('balance_due'),
+        rows: {
+          query: query('customer_invoice_list'),
+          relation: relation('customer_invoice_order'),
+          quantity: field('customer_invoice_balance'),
+        },
+        sum: 'rows',
+      },
+    ],
+    totals: [
+      {
+        figureId: output('to_invoice'),
+        plus: [{ figure: output('shipped_units') }],
+        minus: [{ figure: output('invoiced_units') }],
+        floor: 'zero',
+      },
+    ],
+    bands: [
+      {
+        figureId: output('invoicing'),
+        of: output('to_invoice'),
+        cases: [
+          {
+            value: output('invoicing_done'),
+            label: 'Invoiced',
+            atMost: { value: '0' },
+          },
+        ],
+        otherwise: { value: output('invoicing_open'), label: 'To invoice' },
+      },
+      {
+        figureId: output('collection'),
+        of: output('balance_due'),
+        cases: [
+          {
+            value: output('collection_settled'),
+            label: 'Settled',
+            atMost: { value: '0' },
+          },
+        ],
+        otherwise: { value: output('collection_owing'), label: 'Owing' },
+      },
+    ],
+    whenDenied: 'omit',
+  };
+}
+
+/** The Sales orders List's work, supply and lifecycle (ORDER-PARITY). */
+function salesOrderWork(namespace: string): ListSpec {
   return documentList(
     namespace,
     'sales_order',
@@ -2105,7 +2289,9 @@ function lowerFigures(figures: ListFiguresSpec) {
       figureId: sum.figureId,
       rows: {
         query: queryReference(sum.rows.query),
-        match: sum.rows.match,
+        ...('relation' in sum.rows
+          ? { relation: sum.rows.relation }
+          : { match: sum.rows.match }),
         ...(sum.rows.quantity ? { quantity: sum.rows.quantity } : {}),
       },
       ...(sum.within ? { within: within(sum.within) } : {}),
@@ -2115,6 +2301,9 @@ function lowerFigures(figures: ListFiguresSpec) {
               query: queryReference(sum.related.query),
               relation: sum.related.relation,
               quantity: sum.related.quantity,
+              ...(sum.related.within
+                ? { within: within(sum.related.within) }
+                : {}),
             },
           }
         : {}),
@@ -2184,6 +2373,7 @@ function lowerFigures(figures: ListFiguresSpec) {
           })),
         }
       : {}),
+    ...(figures.whenDenied ? { whenDenied: figures.whenDenied } : {}),
   };
 }
 

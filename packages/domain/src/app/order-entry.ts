@@ -354,7 +354,7 @@ export function orderEntrySurfaces(
       headerLabel: 'Order details',
       linesLabel: 'Order lines',
       saveDescription: sales
-        ? 'Save commits the header and each line in sequence. Drafts do not change stock. Confirm is a separate action, offered once the order has a complete ship-to address (street, city, postal code and country).'
+        ? 'Drafts do not change stock. To confirm, the order needs a complete ship-to address: street, city, postal code and country.'
         : 'Save commits the header and each line in sequence. Drafts do not change stock. Place order is a separate action.',
       saveMode: 'sequential',
       headerFormSurfaceId: id('surface', `${local}_form`),
@@ -380,7 +380,10 @@ export function orderEntrySurfaces(
               ...salesperson,
               ...fromCustomer('party_default_salesperson_party_id'),
             }),
-            field(`${local}_order_date`, 'Order date'),
+            // A new order is dated today (midnight UTC of the current UTC day).
+            field(`${local}_order_date`, 'Order date', {
+              defaultDaysFromToday: 0,
+            }),
             // A new order asks for delivery three weeks out, as the reference
             // does; the user changes it before saving.
             field(`${local}_requested_date`, 'Requested date', {

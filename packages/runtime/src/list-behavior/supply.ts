@@ -4,7 +4,7 @@ import {
   parseSharedListFigureRelated,
   parseSharedListSupplySum,
   type SharedListFigureRelated,
-  type SharedListFigureSum,
+  type SharedListPlainSum,
 } from './figures.js';
 
 /**
@@ -26,7 +26,7 @@ import {
  * Every id is resolved by the gateway against the pinned query catalog and by
  * the executor against the pinned compiled storage.
  */
-export type SharedListSupplySum = Omit<SharedListFigureSum, 'figureId'>;
+export type SharedListSupplySum = SharedListPlainSum;
 
 export interface SharedListSupply {
   readonly coverage: {

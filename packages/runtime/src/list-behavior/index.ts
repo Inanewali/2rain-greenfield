@@ -36,9 +36,12 @@ export {
   type SharedListFigureRelated,
   type SharedListFigures,
   type SharedListFigureSum,
+  type SharedListFigureSumRelated,
+  type SharedListFigureSumRows,
   type SharedListFigureThreshold,
   type SharedListFigureTotal,
   type SharedListFigureWithin,
+  type SharedListPlainSum,
 } from './figures.js';
 export {
   sharedListSupplyReads,
@@ -385,8 +388,8 @@ export function parseSharedListArguments(
     figuresValue === undefined
       ? undefined
       : parseSharedListFigures(figuresValue);
-  if (progress && figures)
-    throw malformed('a list reads progress or figures, not both');
+  // Progress and figures may come together (ORDER-STAGES): each is its own
+  // lateral of the statement, so neither changes what the other reads.
   const beforeFilters =
     beforeFiltersValue === undefined
       ? undefined
@@ -553,8 +556,17 @@ export function authorizeSharedListFields(
           'a figure adds or compares a field the list query selects',
           fieldId,
         );
+    // Beside a progress (ORDER-STAGES), never under one of its outputs.
+    const progressOutputs = new Set<string>([
+      ...Object.values(query.progress?.outputs ?? {}),
+      ...Object.values(query.progress?.supply?.outputs ?? {}),
+    ]);
     for (const figureId of sharedListFigureKinds(query.figures).keys())
-      if (input.selectedFieldIds.has(figureId) || relationIds.has(figureId))
+      if (
+        input.selectedFieldIds.has(figureId) ||
+        relationIds.has(figureId) ||
+        progressOutputs.has(figureId)
+      )
         throw new SharedListContractError(
           'LIST_FIELD_NOT_AUTHORIZED',
           'a figure would shadow a projected field or label',

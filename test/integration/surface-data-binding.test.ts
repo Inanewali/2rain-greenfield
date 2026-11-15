@@ -4957,11 +4957,18 @@ class OrderEntryExecutor
           candidate.entityId === entityOf(queryId) &&
           !candidate.archived &&
           this.owners.get(candidate.recordId) === scope;
-        const matching = (rows: { queryId: string; matchFieldId: string }) =>
+        // By a text field, or through the rows' relation (ORDER-STAGES): a
+        // seeded relation holds its target under the relation's id.
+        const matching = (rows: {
+          queryId: string;
+          matchFieldId?: string;
+          matchRelationId?: string;
+        }) =>
           [...this.rows.values()].filter(
             (candidate) =>
               live(candidate, rows.queryId) &&
-              candidate.values[rows.matchFieldId] === row.recordId,
+              candidate.values[rows.matchFieldId ?? rows.matchRelationId!] ===
+                row.recordId,
           );
         // A parent through a relation, or the record whose id the rows hold
         // in a reference field: a location belongs to no company (LOCATIONS).
@@ -5007,7 +5014,10 @@ class OrderEntryExecutor
                     (pointing) =>
                       live(pointing, sum.related!.queryId) &&
                       pointing.values[sum.related!.relationId] ===
-                        candidate.recordId,
+                        candidate.recordId &&
+                      // Only where their own parent holds a value.
+                      (!sum.related!.within ||
+                        parentOf(pointing, sum.related!.within) !== null),
                   )
                   .reduce(
                     (added, pointing) =>
@@ -5142,39 +5152,43 @@ class OrderEntryExecutor
             );
           }),
       );
+      // Progress and the List's own figures together (ORDER-STAGES), as the
+      // statement computes each in its own lateral.
       const project = (row: SemanticRecordDto) => {
         const listedFigures = figuresOf(row);
-        if (listedFigures) {
-          const projected = projectedListRecord(request, row);
-          return {
-            ...projected,
-            values: { ...projected.values, ...listedFigures.values },
-            displayValues: {
-              ...projected.displayValues,
-              ...listedFigures.labels,
-            },
-          };
-        }
         const projected = projectedListRecord(request, row);
         const summed = figures(row);
         const supply = supplyOf(row);
-        return summed && progress
+        const withProgress =
+          summed && progress
+            ? {
+                ...projected,
+                values: {
+                  ...projected.values,
+                  [progress.outputs.ordered]: String(summed.ordered),
+                  [progress.outputs.done]: String(summed.done),
+                  [progress.outputs.open]: String(summed.open),
+                  ...(supply && progress.supply
+                    ? {
+                        [progress.supply.outputs.covered]: String(
+                          supply.covered,
+                        ),
+                        [progress.supply.outputs.short]: String(supply.short),
+                      }
+                    : {}),
+                },
+              }
+            : projected;
+        return listedFigures
           ? {
-              ...projected,
-              values: {
-                ...projected.values,
-                [progress.outputs.ordered]: String(summed.ordered),
-                [progress.outputs.done]: String(summed.done),
-                [progress.outputs.open]: String(summed.open),
-                ...(supply && progress.supply
-                  ? {
-                      [progress.supply.outputs.covered]: String(supply.covered),
-                      [progress.supply.outputs.short]: String(supply.short),
-                    }
-                  : {}),
+              ...withProgress,
+              values: { ...withProgress.values, ...listedFigures.values },
+              displayValues: {
+                ...withProgress.displayValues,
+                ...listedFigures.labels,
               },
             }
-          : projected;
+          : withProgress;
       };
       const echoed = {
         ...(reference ? { referenceScope: reference } : {}),
@@ -9246,9 +9260,9 @@ test('ORDER-PARITY: order Lists sum their lines, link each row to its work, and 
     [salesView('blocked')]: 1,
     [salesView('reserved')]: 0,
     [salesView('draft')]: 1,
-    [salesView('released')]: 2,
+    [salesView('to_invoice')]: 2,
     [salesView('closed')]: 0,
-    [salesView('cancelled')]: 0,
+    [salesView('to_collect')]: 0,
   });
   assert.equal(cell(sales.html, open, salesColumn('ordered')), '15');
   assert.equal(cell(sales.html, open, salesColumn('shipped')), '4');
@@ -9329,9 +9343,9 @@ test('ORDER-PARITY: order Lists sum their lines, link each row to its work, and 
     [salesView('blocked')]: null,
     [salesView('reserved')]: null,
     [salesView('draft')]: 1,
-    [salesView('released')]: 2,
+    [salesView('to_invoice')]: null,
     [salesView('closed')]: 0,
-    [salesView('cancelled')]: 0,
+    [salesView('to_collect')]: null,
   });
   // The supply extends the progress, so it is withheld with it.
   for (const local of ['ordered', 'shipped', 'open', 'short'])
@@ -9340,6 +9354,17 @@ test('ORDER-PARITY: order Lists sum their lines, link each row to its work, and 
     withheld.html,
     new RegExp(
       `data-list-progress-withheld="${id('query', 'sales_order_shipped_list')}">Ordered, Shipped, Open and Short are withheld by current policy; To ship, Blocked by supply and Reserved need them and are unavailable.<`,
+      'u',
+    ),
+  );
+  // ORDER-STAGES: the order-to-cash figures read the same shipped rows, so
+  // they are withheld too, said once, and only their tabs are refused.
+  for (const local of ['to_invoice', 'balance_due'])
+    assert.equal(cell(withheld.html, open, salesColumn(local)), withheldMark);
+  assert.match(
+    withheld.html,
+    new RegExp(
+      `data-list-figures-withheld="${id('query', 'sales_order_shipped_list')}">To invoice and Balance due are withheld by current policy; To invoice and To collect need them and are unavailable.<`,
       'u',
     ),
   );
@@ -9371,9 +9396,9 @@ test('ORDER-PARITY: order Lists sum their lines, link each row to its work, and 
     .split('\r\n');
   assert.equal(
     csv[0],
-    'Number,Customer,Salesperson,Order date,Requested,Status,Ordered,Shipped,Open,Short,Currency',
+    'Number,Customer,Salesperson,Order date,Requested,Status,Ordered,Shipped,Open,Short,To invoice,Balance due,Currency',
   );
-  assert.ok(csv.some((line) => /^SO-OPEN,.*,,,,,CAD$/u.test(line)));
+  assert.ok(csv.some((line) => /^SO-OPEN,.*,,,,,,,CAD$/u.test(line)));
   const refusedExport = await renderSurfaceRuntimeWithData(
     f.view,
     salesUrl({ view: salesView('to_ship'), export: 'csv' }),
@@ -9869,9 +9894,9 @@ test('SUPPLY-WARNINGS: the Sales orders List counts Blocked by supply and Reserv
     [salesView('blocked')]: 1,
     [salesView('reserved')]: 2,
     [salesView('draft')]: 1,
-    [salesView('released')]: 3,
+    [salesView('to_invoice')]: 0,
     [salesView('closed')]: 1,
-    [salesView('cancelled')]: 0,
+    [salesView('to_collect')]: 0,
   });
   // Short is the order's, marked where anything is short.
   assert.equal(cell(sales.html, short.orderId, 'short'), `6${shortMark}`);
@@ -9957,10 +9982,10 @@ test('SUPPLY-WARNINGS: the Sales orders List counts Blocked by supply and Reserv
     .split('\r\n');
   assert.equal(
     csv[0],
-    'Number,Customer,Salesperson,Order date,Requested,Status,Ordered,Shipped,Open,Short,Currency',
+    'Number,Customer,Salesperson,Order date,Requested,Status,Ordered,Shipped,Open,Short,To invoice,Balance due,Currency',
   );
   assert.equal(csv.length, 2);
-  assert.match(csv[1]!, /^SO-SHORT,.*,14,0,14,6,CAD$/u);
+  assert.match(csv[1]!, /^SO-SHORT,.*,14,0,14,6,0,0,CAD$/u);
 
   // The agent path: the preset carries the supply as the argument it is.
   const preset = (
@@ -10011,9 +10036,9 @@ test('SUPPLY-WARNINGS: the Sales orders List counts Blocked by supply and Reserv
       [salesView('blocked')]: null,
       [salesView('reserved')]: null,
       [salesView('draft')]: 1,
-      [salesView('released')]: 3,
+      [salesView('to_invoice')]: 0,
       [salesView('closed')]: 1,
-      [salesView('cancelled')]: 0,
+      [salesView('to_collect')]: 0,
     });
     assert.equal(cell(withheld.html, short.orderId, 'short'), withheldMark);
     assert.equal(cell(withheld.html, short.orderId, 'open'), '14');
@@ -10047,7 +10072,7 @@ test('SUPPLY-WARNINGS: the Sales orders List counts Blocked by supply and Reserv
     assert.ok(
       file
         .download!.body.split('\r\n')
-        .some((line) => /^SO-SHORT,.*,14,0,14,,CAD$/u.test(line)),
+        .some((line) => /^SO-SHORT,.*,14,0,14,,0,0,CAD$/u.test(line)),
     );
     const refusedFile = await renderSurfaceRuntimeWithData(
       f.view,
@@ -11163,6 +11188,8 @@ test('ORDER-PARITY: an order page names the lines it is short and shows where it
     [draft.lines[1]!, '0'],
   ]);
   let toInvoice: string | null = null;
+  let toShip: string | null = null;
+  let balanceDue: string | null = null;
   const gateways = statingGateways(f, {
     fulfillment: (key, record) =>
       key === 'short'
@@ -11177,9 +11204,13 @@ test('ORDER-PARITY: an order page names the lines it is short and shows where it
     commercial: (key) =>
       key === 'order_to_invoice'
         ? toInvoice
-        : key === 'order_total'
-          ? toInvoice && '25'
-          : null,
+        : key === 'order_to_ship'
+          ? toShip
+          : key === 'order_balance_due'
+            ? balanceDue
+            : key === 'order_total'
+              ? toInvoice && '25'
+              : null,
   });
   const alert = (html: string) =>
     /<section class="composition-alert"[^>]*>([\s\S]*?)<\/section>/u.exec(
@@ -11217,6 +11248,7 @@ test('ORDER-PARITY: an order page names the lines it is short and shows where it
   assert.doesNotMatch(banner, /role=/u);
   assert.deepEqual(states(drafted.html), [
     'current',
+    'upcoming',
     'upcoming',
     'upcoming',
     'upcoming',
@@ -11261,6 +11293,7 @@ test('ORDER-PARITY: an order page names the lines it is short and shows where it
     'current',
     'attention',
     'upcoming',
+    'upcoming',
   ]);
   assert.match(
     confirmed.html,
@@ -11273,6 +11306,65 @@ test('ORDER-PARITY: an order page names the lines it is short and shows where it
     confirmed.html,
     /aria-label="Next action: Invoice shipped quantities"/u,
   );
+  // As the order moves on: still shipping with nothing to invoice, then
+  // shipping the rest while a part invoice is owed, then invoiced and owing,
+  // then paid and ready to close.
+  const stages = async () =>
+    states(
+      (
+        await renderSurfaceRuntimeWithData(
+          f.view,
+          path(released.order),
+          gateways,
+        )
+      ).html,
+    );
+  toInvoice = '0';
+  toShip = '3';
+  balanceDue = '0';
+  assert.deepEqual(await stages(), [
+    'complete',
+    'current',
+    'upcoming',
+    'upcoming',
+    'upcoming',
+  ]);
+  // Shipped and invoiced in parts: the owed invoice is collected while the
+  // rest still ships.
+  balanceDue = '25';
+  assert.deepEqual(await stages(), [
+    'complete',
+    'current',
+    'upcoming',
+    'current',
+    'upcoming',
+  ]);
+  toShip = '0';
+  balanceDue = '40';
+  assert.deepEqual(await stages(), [
+    'complete',
+    'complete',
+    'complete',
+    'current',
+    'upcoming',
+  ]);
+  balanceDue = '0';
+  assert.deepEqual(await stages(), [
+    'complete',
+    'complete',
+    'complete',
+    'complete',
+    'current',
+  ]);
+  // A figure that cannot be stated never moves the order along.
+  toShip = null;
+  assert.deepEqual(await stages(), [
+    'complete',
+    'current',
+    'upcoming',
+    'upcoming',
+    'upcoming',
+  ]);
   // A cancelled order stopped at every step, with nothing next -- even with
   // figures that would otherwise offer a step.
   const cancelled = seedOrder('cancelled');
@@ -11282,6 +11374,7 @@ test('ORDER-PARITY: an order page names the lines it is short and shows where it
     gateways,
   );
   assert.deepEqual(states(stopped.html), [
+    'stopped',
     'stopped',
     'stopped',
     'stopped',

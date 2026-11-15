@@ -1635,15 +1635,47 @@ const listRowAction = z.strictObject({
   section: CanonicalIdSchema.optional(),
 });
 /**
+ * A figure sum's rows: those holding the listed record's id in a text field
+ * (`match`), or -- an optional v6 member (ORDER-STAGES) -- those pointing at
+ * the listed record through one of their relations (`relation`), as an
+ * order's lines and invoices point at their order.
+ */
+const listFigureSumRows = z.union([
+  listFigureRows,
+  z.strictObject({
+    query: compositionReference('queryReference'),
+    relation: CanonicalIdSchema,
+    quantity: CanonicalIdSchema.optional(),
+  }),
+]);
+/**
+ * A figure sum's related rows, optionally -- an optional v6 key
+ * (ORDER-STAGES) -- only where their own parent, through their relation to
+ * it, holds one of `within`'s values: invoice lines of invoices that count.
+ */
+const listFigureSumRelated = z.strictObject({
+  query: compositionReference('queryReference'),
+  relation: CanonicalIdSchema,
+  quantity: CanonicalIdSchema,
+  within: z
+    .strictObject({
+      relation: CanonicalIdSchema,
+      query: compositionReference('queryReference'),
+      field: CanonicalIdSchema,
+      values: z.array(z.string().min(1).max(240)).min(1).max(8),
+    })
+    .optional(),
+});
+/**
  * One per-row sum: `rows` adds the rows' quantity, `related` the related rows'
  * quantity, and `remaining` each row's quantity less its related rows',
  * never below zero per row -- what is still to arrive on a released order line.
  */
 const listFigureSum = z.strictObject({
   figureId: CanonicalIdSchema,
-  rows: listFigureRows,
+  rows: listFigureSumRows,
   within: listFigureWithin.optional(),
-  related: listFigureRelated.optional(),
+  related: listFigureSumRelated.optional(),
   sum: z.enum(['rows', 'related', 'remaining']),
 });
 /** A figure declared before, or an exact decimal the List's own query selects. */
@@ -1775,6 +1807,13 @@ const listFigures = z.strictObject({
   totals: z.array(listFigureTotal).max(6).optional(),
   bands: z.array(listFigureBand).max(2).optional(),
   latest: z.array(listFigureLatest).max(2).optional(),
+  /**
+   * `omit`: the figures are supplementary (ORDER-STAGES), as a progress may
+   * be. When current policy denies a query they read, the List is read
+   * without them -- their columns read "—" -- and only a view that keeps one
+   * of their bands is refused. Absent, a denial refuses the whole List.
+   */
+  whenDenied: z.literal('omit').optional(),
 });
 /**
  * A child entity whose records also answer the List's search: a row matches

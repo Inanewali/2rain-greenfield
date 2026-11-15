@@ -71,6 +71,7 @@ import {
   type SharedListFigureOperand,
   type SharedListFigureRelated,
   type SharedListFigureSum,
+  type SharedListFigureSumRelated,
   type SharedListFigureThreshold,
   type SharedListFigureWithin,
   type SharedListSupply,
@@ -2480,6 +2481,7 @@ function listSupplyPlan(
   const related = relatedPlan(supply.coverage.related, {
     entity: covering,
     matchColumn: toLine.relationColumn.physicalName,
+    matchThrough: 'relation',
     quantityColumn: null,
   });
   const item = column(
@@ -2635,6 +2637,7 @@ function listSupplyFromSql(
                  {
                    entity: supply.coverage.entity,
                    matchColumn: supply.coverage.lineColumn,
+                   matchThrough: 'relation',
                    quantityColumn: null,
                  },
                  cover,
@@ -2751,8 +2754,13 @@ type StorageColumn = StorageEntity['columns'][number];
 
 interface FigureRowsPlan {
   readonly entity: StorageEntity;
-  /** The rows' text column that holds the listed record's id. */
+  /**
+   * The rows' column that holds the listed record's id: a text column
+   * compared as text, or (ORDER-STAGES) a compiled relation column to the
+   * listed entity, compared as its record identity.
+   */
   readonly matchColumn: string;
+  readonly matchThrough: 'relation' | 'text';
   readonly quantityColumn: string | null;
 }
 
@@ -2775,6 +2783,8 @@ interface FigureRelatedPlan {
   /** The related rows' column that holds a figure row's record id. */
   readonly relationColumn: string;
   readonly quantityColumn: string;
+  /** Only related rows whose own parent holds a value (ORDER-STAGES). */
+  readonly within: FigureWithinPlan | null;
 }
 
 /** One sum's parts: rows, their parent, related rows and what it adds. */
@@ -2881,6 +2891,11 @@ function figurePartsPlanner(
   storage: StorageTargetPayloadV1,
   authorizedEntityIds: Readonly<Record<string, string>>,
   refuse: (subject: string, message: string) => never,
+  /**
+   * The listed entity, when rows may point at it through a relation
+   * (ORDER-STAGES); absent, as for a supply, only a text match is planned.
+   */
+  listed?: StorageEntity,
 ) {
   const entities = new Map<string, StorageEntity>();
   const entityOf = (queryId: string) => {
@@ -2918,6 +2933,7 @@ function figurePartsPlanner(
       entity: target,
       matchColumn: column(target, matchFieldId, ['textFieldType'], matchMessage)
         .physicalName,
+      matchThrough: 'text' as const,
       quantityColumn:
         quantityFieldId === undefined
           ? null
@@ -2981,7 +2997,7 @@ function figurePartsPlanner(
     });
   };
   const relatedPlan = (
-    related: SharedListFigureRelated,
+    related: SharedListFigureRelated | SharedListFigureSumRelated,
     rows: FigureRowsPlan,
   ): FigureRelatedPlan => {
     const pointing = entityOf(related.queryId);
@@ -2996,27 +3012,86 @@ function figurePartsPlanner(
         related.relationId,
         "a figure's related rows do not match the compiled storage relations",
       );
+    const quantityColumn = column(
+      pointing,
+      related.fieldId,
+      ['exactDecimalFieldType'],
+      'a figure sums a compiled exact decimal column',
+    ).physicalName;
+    const relationColumn = relation.relationColumn.physicalName;
+    // The related rows' own parent (ORDER-STAGES), reached through their
+    // compiled relation to it, exactly as a sum's rows reach theirs.
+    const within =
+      'within' in related && related.within
+        ? withinPlan(
+            Object.freeze({
+              entity: pointing,
+              matchColumn: relationColumn,
+              matchThrough: 'relation' as const,
+              quantityColumn: null,
+            }),
+            related.within,
+          )
+        : null;
     return Object.freeze({
       entity: pointing,
-      relationColumn: relation.relationColumn.physicalName,
-      quantityColumn: column(
-        pointing,
-        related.fieldId,
-        ['exactDecimalFieldType'],
-        'a figure sums a compiled exact decimal column',
-      ).physicalName,
+      relationColumn,
+      quantityColumn,
+      within,
+    });
+  };
+  /** Rows pointing at the listed record through a relation (ORDER-STAGES). */
+  const pointingRowsPlan = (
+    queryId: string,
+    relationId: string,
+    quantityFieldId?: string,
+  ): FigureRowsPlan => {
+    const target = entityOf(queryId);
+    const relation = listed
+      ? storage.relations.find(
+          (candidate) =>
+            candidate.relationId === relationId &&
+            candidate.sourceEntityId === target.entityId &&
+            candidate.targetEntityId === listed.entityId,
+        )
+      : undefined;
+    if (!relation)
+      return refuse(
+        relationId,
+        "a figure's rows point at the listed record through a compiled relation",
+      );
+    return Object.freeze({
+      entity: target,
+      matchColumn: relation.relationColumn.physicalName,
+      matchThrough: 'relation' as const,
+      quantityColumn:
+        quantityFieldId === undefined
+          ? null
+          : column(
+              target,
+              quantityFieldId,
+              ['exactDecimalFieldType'],
+              'a figure sums a compiled exact decimal column',
+            ).physicalName,
     });
   };
   const sumPlan = (
     sum: Omit<SharedListFigureSum, 'figureId'>,
     matchMessage?: string,
   ): FigureSumPlan => {
-    const rows = rowsPlan(
-      sum.rows.queryId,
-      sum.rows.matchFieldId,
-      sum.rows.quantityFieldId,
-      matchMessage,
-    );
+    const rows =
+      sum.rows.matchRelationId !== undefined
+        ? pointingRowsPlan(
+            sum.rows.queryId,
+            sum.rows.matchRelationId,
+            sum.rows.quantityFieldId,
+          )
+        : rowsPlan(
+            sum.rows.queryId,
+            sum.rows.matchFieldId,
+            sum.rows.quantityFieldId,
+            matchMessage,
+          );
     // Related rows resolve before the parent, as the figures always have.
     const related = sum.related ? relatedPlan(sum.related, rows) : null;
     return Object.freeze({
@@ -3068,7 +3143,7 @@ function listFiguresPlan(
       'list figures reached the executor without authorization',
     );
   const { entities, entityOf, column, rowsPlan, withinPlan, sumPlan } =
-    figurePartsPlanner(storage, authorized.entityIds, refuse);
+    figurePartsPlanner(storage, authorized.entityIds, refuse, entity);
   const listedDecimal = (fieldId: string) =>
     column(
       entity,
@@ -3282,8 +3357,25 @@ function figureRelatedTotalSql(
   readScope: VerifiedLegalEntityReadScope | null,
   values: unknown[],
 ): string {
+  // Only related rows whose own parent holds a kept value (ORDER-STAGES),
+  // joined as a sum's rows join theirs.
+  const parent = related.within
+    ? figureParentJoinSql(
+        related.within,
+        {
+          entity: related.entity,
+          matchColumn: related.relationColumn,
+          matchThrough: 'relation',
+          quantityColumn: null,
+        },
+        alias,
+        `${alias}_parent`,
+        readScope,
+        values,
+      )
+    : '';
   return `(SELECT coalesce(sum(${qualified(alias, related.quantityColumn)}), 0)
-           FROM north_star_module.${quoted(related.entity.physicalTableName)} AS ${quoted(alias)}
+           FROM north_star_module.${quoted(related.entity.physicalTableName)} AS ${quoted(alias)}${parent}
           WHERE ${qualified(alias, 'tenant_id')} = ${qualified(rowsAlias, 'tenant_id')}
             AND ${qualified(alias, 'environment_id')} = ${qualified(rowsAlias, 'environment_id')}
             AND ${qualified(alias, related.relationColumn)} = ${qualified(rowsAlias, rows.entity.recordIdentity.column)}
@@ -3347,10 +3439,16 @@ function listFiguresFromSql(
   readScope: VerifiedLegalEntityReadScope | null,
   values: unknown[],
 ): string {
+  // A text match compares the id as text; rows pointing at the listed record
+  // through a relation (ORDER-STAGES) compare its record identity itself.
   const matching = (rows: FigureRowsPlan, alias: string) =>
     `${qualified(alias, 'tenant_id')} = ${qualified(sourceAlias, 'tenant_id')}
           AND ${qualified(alias, 'environment_id')} = ${qualified(sourceAlias, 'environment_id')}
-          AND ${qualified(alias, rows.matchColumn)}::text = ${qualified(sourceAlias, entity.recordIdentity.column)}::text
+          AND ${
+            rows.matchThrough === 'relation'
+              ? `${qualified(alias, rows.matchColumn)} = ${qualified(sourceAlias, entity.recordIdentity.column)}`
+              : `${qualified(alias, rows.matchColumn)}::text = ${qualified(sourceAlias, entity.recordIdentity.column)}::text`
+          }
           AND ${qualified(alias, rows.entity.archive.archivedAtColumn)} IS NULL${legalEntityReadScopeJoinConjunction(rows.entity, readScope, values, alias)}`;
   const parentJoin = (
     within: FigureWithinPlan,

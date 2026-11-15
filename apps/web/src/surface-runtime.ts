@@ -22,8 +22,10 @@ import {
   figureBandLabel,
   readDeclaredListState,
   viewNeedsProgress,
+  viewNeedsFigures,
   viewNeedsSupply,
   withheldProgressQuery,
+  withheldFiguresQuery,
   withheldSupplyQuery,
   type DeclaredListState,
 } from './list-declaration.js';
@@ -622,6 +624,8 @@ async function loadFormReferences(
 interface WithheldFigures {
   readonly progress: string | null;
   readonly supply: string | null;
+  /** The List's own figures (ORDER-STAGES), withheld apart from progress. */
+  readonly figures: string | null;
 }
 
 /**
@@ -634,12 +638,18 @@ function withholding(
   withheld: WithheldFigures,
   error: unknown,
 ): WithheldFigures | null {
-  if (withheld.progress !== null) return null;
-  const progress = withheldProgressQuery(list, error);
-  if (progress !== null) return { ...withheld, progress };
-  const supply =
-    withheld.supply === null ? withheldSupplyQuery(list, error) : null;
-  return supply === null ? null : { ...withheld, supply };
+  // The progress (and the supply that extends it) is withheld at most once.
+  if (withheld.progress === null) {
+    const progress = withheldProgressQuery(list, error);
+    if (progress !== null) return { ...withheld, progress };
+    const supply =
+      withheld.supply === null ? withheldSupplyQuery(list, error) : null;
+    if (supply !== null) return { ...withheld, supply };
+  }
+  // The List's own figures are withheld on their own (ORDER-STAGES).
+  const figures =
+    withheld.figures === null ? withheldFiguresQuery(list, error) : null;
+  return figures === null ? null : { ...withheld, figures };
 }
 
 /** Whether a view can be read with what is withheld: never one needing it. */
@@ -650,7 +660,8 @@ function viewServes(
 ): boolean {
   return !(
     (withheld.progress !== null && viewNeedsProgress(list, viewId)) ||
-    (withheld.supply !== null && viewNeedsSupply(list, viewId))
+    (withheld.supply !== null && viewNeedsSupply(list, viewId)) ||
+    (withheld.figures !== null && viewNeedsFigures(list, viewId))
   );
 }
 
@@ -659,6 +670,7 @@ function withoutWithheld(withheld: WithheldFigures) {
   return {
     ...(withheld.progress !== null ? { withoutProgress: true } : {}),
     ...(withheld.supply !== null ? { withoutSupply: true } : {}),
+    ...(withheld.figures !== null ? { withoutFigures: true } : {}),
   };
 }
 
@@ -669,6 +681,7 @@ function withheldRenderData(withheld: WithheldFigures) {
       ? {}
       : { progressWithheld: withheld.progress }),
     ...(withheld.supply === null ? {} : { supplyWithheld: withheld.supply }),
+    ...(withheld.figures === null ? {} : { figuresWithheld: withheld.figures }),
   };
 }
 
@@ -716,23 +729,38 @@ async function declaredListData(
       queryId: binding.query.queryId,
       schemaVersion: SEMANTIC_QUERY_REQUEST_VERSION,
     });
-  const viewCounts = async (withheld: WithheldFigures) => {
+  // The counts, and what they had to be read without: a refused page stops at
+  // the first withheld read, so a count may still meet another the List can
+  // be read without (ORDER-STAGES: its own figures beside its progress).
+  const viewCounts = async (initial: WithheldFigures) => {
     const counts: Record<string, number> = {};
+    let withheld = initial;
     for (const listView of list.views) {
-      // A view needing withheld figures is never counted without them: its
-      // tab shows no count, and its own page refuses.
-      if (!viewServes(list, withheld, listView.viewId)) continue;
-      try {
-        const counted = await read('count', state, withheld, listView.viewId);
-        if (counted.listCoverage)
-          counts[listView.viewId] = counted.listCoverage.totalCount;
-      } catch {
-        // Omitted: the tab still navigates, and its own page reports its count.
+      for (;;) {
+        // A view needing withheld figures is never counted without them: its
+        // tab shows no count, and its own page refuses.
+        if (!viewServes(list, withheld, listView.viewId)) break;
+        try {
+          const counted = await read('count', state, withheld, listView.viewId);
+          if (counted.listCoverage)
+            counts[listView.viewId] = counted.listCoverage.totalCount;
+          break;
+        } catch (error) {
+          const next = withholding(list, withheld, error);
+          // Omitted: the tab still navigates, and its own page reports its
+          // count.
+          if (next === null) break;
+          withheld = next;
+        }
       }
     }
-    return counts;
+    return { counts, withheld };
   };
-  let withheld: WithheldFigures = { progress: null, supply: null };
+  let withheld: WithheldFigures = {
+    progress: null,
+    supply: null,
+    figures: null,
+  };
   let result: SemanticQueryResultEnvelope | undefined;
   while (result === undefined) {
     try {
@@ -741,17 +769,19 @@ async function declaredListData(
       const next = withholding(list, withheld, error);
       if (next === null) throw error;
       withheld = next;
-      if (!viewServes(list, withheld, state.viewId))
+      if (!viewServes(list, withheld, state.viewId)) {
+        const counted = await viewCounts(withheld);
         return {
           code: 'QUERY_PERMISSION_DENIED',
           declaredList: {
-            counts: await viewCounts(withheld),
+            counts: counted.counts,
             now,
-            ...withheldRenderData(withheld),
+            ...withheldRenderData(counted.withheld),
             state,
           },
           status: 'DIAGNOSTIC',
         };
+      }
     }
   }
   const coverage = result.listCoverage;
@@ -765,7 +795,8 @@ async function declaredListData(
     state = { ...state, page: lastPage };
     result = await read('page', state, withheld);
   }
-  const counts = await viewCounts(withheld);
+  // The page was read with everything it withholds; its rows say so.
+  const { counts } = await viewCounts(withheld);
   const data = dataState(result);
   return data.status === 'READY'
     ? {
@@ -816,7 +847,11 @@ async function exportDeclaredList(
     });
   let result: SemanticQueryResultEnvelope | undefined;
   try {
-    let withheld: WithheldFigures = { progress: null, supply: null };
+    let withheld: WithheldFigures = {
+      progress: null,
+      supply: null,
+      figures: null,
+    };
     while (result === undefined) {
       try {
         result = await exported(withheld);
@@ -2569,7 +2604,9 @@ main{width:min(1200px,100%);margin:0 auto;padding:var(--page-padding) var(--page
 /* Draft document editor. The line table and create form sit inside .form-fields so their controls use the already-measured focus rings; this block declares no new focus-ring selectors. */
 table.draft-lines.form-fields{display:table;width:100%;margin:0;border-collapse:separate;border-spacing:0 var(--space-2);table-layout:fixed}
 .draft-lines th{padding:0 var(--space-2) var(--space-1);text-align:left;font-size:var(--text-body);font-weight:600;color:var(--ink-muted)}
-.draft-lines__heading--reference{width:46%}.draft-lines__heading--value{width:17%}.draft-lines__heading--derived{width:10%}.draft-lines__heading--remove{width:6.5rem}
+.draft-lines__heading--reference{width:8.5rem}.draft-lines__heading--value{width:5.25rem}.draft-lines__heading--derived{width:4rem}.draft-lines__heading--remove{width:4.5rem}
+/* The first column (the product) has no width, so it takes whatever the fixed columns leave, whatever the column count. */
+.draft-lines__heading--reference:first-child{width:auto}
 .draft-line__cell{padding:var(--space-2);vertical-align:top;border-top:1px solid var(--line);border-bottom:1px solid var(--line);background:var(--surface-panel)}
 .draft-line__cell:first-child{border-left:1px solid var(--line);border-radius:var(--radius-control) 0 0 var(--radius-control)}
 .draft-line__cell:last-child{border-right:1px solid var(--line);border-radius:0 var(--radius-control) var(--radius-control) 0;text-align:right}

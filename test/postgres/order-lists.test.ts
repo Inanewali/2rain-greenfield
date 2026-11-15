@@ -280,9 +280,11 @@ test(
         [salesView('blocked')]: 0,
         [salesView('reserved')]: 1,
         [salesView('draft')]: byState('draft'),
-        [salesView('released')]: byState('released'),
+        // ORDER-STAGES: the shipping order's 3 shipped units are on no
+        // invoice, and nothing is invoiced here, so nothing is owed.
+        [salesView('to_invoice')]: 1,
+        [salesView('to_collect')]: 0,
         [salesView('closed')]: byState('closed'),
-        [salesView('cancelled')]: byState('cancelled'),
       });
       // 5 + 3 ordered, 3 of the first line shipped: 5 still to ship.
       const shipping = scenario.sales.shipping.recordId;
@@ -325,7 +327,7 @@ test(
         .split('\r\n');
       assert.equal(
         csv[0],
-        'Number,Customer,Salesperson,Order date,Requested,Status,Ordered,Shipped,Open,Short,Currency',
+        'Number,Customer,Salesperson,Order date,Requested,Status,Ordered,Shipped,Open,Short,To invoice,Balance due,Currency',
       );
       assert.equal(csv.length - 1, toShip.length);
 
@@ -432,7 +434,11 @@ test(
       assert.equal(withheld.counts[salesView('to_ship')], null);
       assert.equal(withheld.counts[salesView('blocked')], null);
       assert.equal(withheld.counts[salesView('reserved')], null);
-      assert.equal(withheld.counts[salesView('released')], byState('released'));
+      // The order-to-cash figures read the same shipped rows, so their tabs
+      // are withheld with the progress; Draft still counts.
+      assert.equal(withheld.counts[salesView('to_invoice')], null);
+      assert.equal(withheld.counts[salesView('to_collect')], null);
+      assert.equal(withheld.counts[salesView('draft')], byState('draft'));
       assert.equal(withheld.action(shipping)?.label, 'View');
       const refused = await page(
         salesUrl(fixture, { view: salesView('to_ship') }),

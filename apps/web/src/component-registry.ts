@@ -165,6 +165,12 @@ export interface DeclaredListRenderData {
    * keeps covered or short rows refuses.
    */
   readonly supplyWithheld?: string;
+  /**
+   * The figure query current policy withheld from a List whose figures are
+   * supplementary (ORDER-STAGES): they read "—", and a view that keeps one of
+   * their bands refuses.
+   */
+  readonly figuresWithheld?: string;
   readonly state: DeclaredListState;
 }
 
@@ -585,6 +591,7 @@ function renderDataGrid(context: SurfaceComponentContext): string {
           displayFieldValue(context.view, record, fieldId, value),
         progressWithheld: data.declaredList.progressWithheld ?? null,
         supplyWithheld: data.declaredList.supplyWithheld ?? null,
+        figuresWithheld: data.declaredList.figuresWithheld ?? null,
         recordLabel,
         records: data.records,
         // The row's record page, at the section its action names -- only a
@@ -614,6 +621,7 @@ function renderDataGrid(context: SurfaceComponentContext): string {
           context.surface.list,
           data.declaredList?.progressWithheld ?? null,
           data.declaredList?.supplyWithheld ?? null,
+          data.declaredList?.figuresWithheld ?? null,
         )
       : '';
     return slotPanel(
@@ -2451,6 +2459,8 @@ interface DeclaredListRenderInput {
   readonly progressWithheld: string | null;
   /** The supply query current policy withheld; its figures read "—". */
   readonly supplyWithheld: string | null;
+  /** A figure query current policy withheld; the figures read "—". */
+  readonly figuresWithheld: string | null;
   readonly recordLabel: string;
   readonly records: readonly SemanticRecordDto[];
   /** Where a row's action leads, or `null` when it cannot be linked. */
@@ -2472,7 +2482,10 @@ interface DeclaredListRenderInput {
 function withheldNote(
   list: SurfaceList,
   withheld: string,
-  attribute: 'data-list-progress-withheld' | 'data-list-supply-withheld',
+  attribute:
+    | 'data-list-figures-withheld'
+    | 'data-list-progress-withheld'
+    | 'data-list-supply-withheld',
   outputs: ReadonlySet<string>,
   needs: (view: SurfaceList['views'][number]) => boolean,
   fallback: string,
@@ -2500,6 +2513,19 @@ function withheldFiguresNote(
   list: SurfaceList,
   progressWithheld: string | null,
   supplyWithheld: string | null,
+  figuresWithheld: string | null = null,
+): string {
+  return (
+    withheldProgressNote(list, progressWithheld, supplyWithheld) +
+    withheldListFiguresNote(list, figuresWithheld)
+  );
+}
+
+/** The progress (or its supply alone) current policy withheld. */
+function withheldProgressNote(
+  list: SurfaceList,
+  progressWithheld: string | null,
+  supplyWithheld: string | null,
 ): string {
   const progress = list.progress;
   if (!progress) return '';
@@ -2523,6 +2549,29 @@ function withheldFiguresNote(
       'Supply figures',
     );
   return '';
+}
+
+/** The List's own figures current policy withheld (ORDER-STAGES). */
+function withheldListFiguresNote(
+  list: SurfaceList,
+  figuresWithheld: string | null,
+): string {
+  const figures = list.figures;
+  if (!figures || figuresWithheld === null) return '';
+  return withheldNote(
+    list,
+    figuresWithheld,
+    'data-list-figures-withheld',
+    new Set([
+      ...figures.sums.map((entry) => entry.figureId),
+      ...(figures.choices ?? []).map((entry) => entry.figureId),
+      ...(figures.totals ?? []).map((entry) => entry.figureId),
+      ...(figures.bands ?? []).map((entry) => entry.figureId),
+      ...(figures.latest ?? []).map((entry) => entry.figureId),
+    ]),
+    (view) => view.band !== undefined,
+    'Figures',
+  );
 }
 
 /** Saved-view tabs; counts are server counts of each view under the current search and filters. */
@@ -2716,6 +2765,7 @@ function renderDeclaredList(input: DeclaredListRenderInput): string {
     list,
     input.progressWithheld,
     input.supplyWithheld,
+    input.figuresWithheld,
   );
   return `<section class="panel data-panel" data-data-state="exact" data-list-result="${escapeHtml(coverage.schemaVersion)}" data-declared-list="true"${anchor}><div class="panel__heading"><div><h2>${escapeHtml(input.recordLabel)}</h2></div><div class="list-summary"><span class="status-pill" data-status-role="success" data-list-total="${String(coverage.totalCount)}">${escapeHtml(count)}</span>${range ? `<span class="muted">${escapeHtml(range)}</span>` : ''}${exportControl}</div></div>${withheld}${controls}${empty}${input.records.length > 0 ? `<div class="data-table-wrap" data-list-rendering="responsive-single"><table><thead><tr>${input.selectionCell ? '<th scope="col">Select</th>' : ''}${header}${rowActions ? '<th scope="col">Actions</th>' : ''}</tr></thead><tbody>${body}</tbody></table></div>` : ''}${paging}</section>`;
 }

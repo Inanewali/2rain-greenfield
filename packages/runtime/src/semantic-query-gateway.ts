@@ -1031,15 +1031,29 @@ async function authorizeSharedListProjection(
     const referenced = (within: { readonly referenceFieldId?: string }) =>
       within.referenceFieldId === undefined ? [] : [within.referenceFieldId];
     for (const sum of query.figures.sums) {
-      use(sum.rows.queryId, [
-        sum.rows.matchFieldId,
-        ...(sum.rows.quantityFieldId ? [sum.rows.quantityFieldId] : []),
-        ...(sum.within ? referenced(sum.within) : []),
-      ]);
+      // Rows holding the listed record's id as text, or pointing at it
+      // through their own relation (ORDER-STAGES), read as a relation.
+      use(
+        sum.rows.queryId,
+        [
+          ...(sum.rows.matchFieldId ? [sum.rows.matchFieldId] : []),
+          ...(sum.rows.quantityFieldId ? [sum.rows.quantityFieldId] : []),
+          ...(sum.within ? referenced(sum.within) : []),
+        ],
+        sum.rows.matchRelationId,
+      );
       if (sum.within)
         use(sum.within.queryId, [sum.within.fieldId], sum.within.relationId);
-      if (sum.related)
+      if (sum.related) {
         use(sum.related.queryId, [sum.related.fieldId], sum.related.relationId);
+        // The related rows' own parent, read for the value it must hold.
+        if (sum.related.within)
+          use(
+            sum.related.within.queryId,
+            [sum.related.within.fieldId],
+            sum.related.within.relationId,
+          );
+      }
     }
     // A choice's company percentage reads the List's own company through a
     // list of the companies, joined without a company as a label is.

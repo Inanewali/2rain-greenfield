@@ -147,9 +147,9 @@ test(
           [salesView('blocked')]: 0,
           [salesView('reserved')]: 0,
           [salesView('draft')]: byState('draft'),
-          [salesView('released')]: byState('released'),
+          [salesView('to_invoice')]: 0,
           [salesView('closed')]: byState('closed'),
-          [salesView('cancelled')]: byState('cancelled'),
+          [salesView('to_collect')]: 0,
         });
         assert.ok(byState('draft') > 0 && byState('released') > 0);
         // Customers are named through the party list, never shown as ids.
@@ -179,12 +179,25 @@ test(
         ).length;
         assert.ok(expected > 0);
         assert.equal(searched.total, expected);
-        // Each tab under the same search counts its share of the same set.
+        // Each tab under the same search counts its share of the same set:
+        // Draft and Closed, with the released and cancelled orders that have
+        // no tab of their own (ORDER-STAGES) as storage holds them.
+        const matchingIn = (local: string) =>
+          stored.filter(
+            (row) =>
+              row.state === `${ns}:state.sales_order_${local}` &&
+              row.customer?.toLowerCase().includes(term.toLowerCase()),
+          ).length;
+        assert.equal(searched.counts[salesView('draft')], matchingIn('draft'));
+        assert.equal(
+          searched.counts[salesView('closed')],
+          matchingIn('closed'),
+        );
         assert.equal(
           searched.counts[salesView('draft')]! +
-            searched.counts[salesView('released')]! +
             searched.counts[salesView('closed')]! +
-            searched.counts[salesView('cancelled')]!,
+            matchingIn('released') +
+            matchingIn('cancelled'),
           searched.counts[salesView('all')],
         );
 
@@ -245,7 +258,7 @@ test(
         // the units each order's lines order, ship and leave open.
         assert.equal(
           csv[0],
-          'Number,Customer,Salesperson,Order date,Requested,Status,Ordered,Shipped,Open,Short,Currency',
+          'Number,Customer,Salesperson,Order date,Requested,Status,Ordered,Shipped,Open,Short,To invoice,Balance due,Currency',
         );
         assert.equal(csv.length - 1, byState('draft'));
         assert.ok(csv.slice(1).every((row) => row.includes(',Draft,')));
@@ -365,11 +378,11 @@ test(
     list.pageSize = 10;
     list.views = list.views
       .filter((view) =>
-        [salesView('released'), salesView('draft')].includes(view.viewId),
+        [salesView('closed'), salesView('draft')].includes(view.viewId),
       )
       .map((view) => ({
         ...view,
-        orderKey: view.viewId === salesView('released') ? 1 : 2,
+        orderKey: view.viewId === salesView('draft') ? 1 : 2,
       }));
     list.defaultSort = [
       {
@@ -390,7 +403,7 @@ test(
       }
     ).tiles)
       if (tile.surface === `${ns}:surface.sales_order_list`)
-        tile.view = salesView('released');
+        tile.view = salesView('draft');
     authored.queries.find(
       (query) => query.queryId === `${ns}:query.sales_order_list`,
     )!.exportMaximumResultCount = 5;
@@ -440,11 +453,11 @@ test(
       async (fixture) => {
         const served = await page(listUrl(fixture, 'sales_order'));
         assert.equal(served.status, 200);
-        // The first declared view is now Released, and only two views exist.
-        assert.equal(served.currentView, salesView('released'));
+        // The first declared view is now Draft, and only two views exist.
+        assert.equal(served.currentView, salesView('draft'));
         assert.deepEqual(Object.keys(served.counts), [
-          salesView('released'),
           salesView('draft'),
+          salesView('closed'),
         ]);
         // Page size 10 and customer-name order come from the declaration.
         const numbers = served.cells('number');
@@ -480,7 +493,7 @@ test(
             )!
             .views.map((view) => view.viewId)
             .sort(),
-          [salesView('draft'), salesView('released')],
+          [salesView('closed'), salesView('draft')],
         );
         assert.equal(
           payload.queries.find(

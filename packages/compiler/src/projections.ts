@@ -736,6 +736,22 @@ function surfaceManifestPayload(
   // Floor 22 (SALES-EXTRAS' 15, renumbered in INTEGRATION): ranked editor
   // defaults (`tiers`), and Tasks of more than five steps or whose per-row
   // step reads an earlier per-row step's read-back.
+  // ORDER-STAGES: List figures beside a progress, sums over rows pointing at
+  // the listed record through a relation or over related rows whose own
+  // parent holds a value, and supplementary (omitted-when-denied) figures.
+  const orderStages = original.surfaces.some((surface) => {
+    const list =
+      'list' in surface ? (surface.list as SurfaceList | undefined) : undefined;
+    const figures = list?.figures;
+    return (
+      figures !== undefined &&
+      (list?.progress !== undefined ||
+        figures.whenDenied !== undefined ||
+        figures.sums.some(
+          (sum) => 'relation' in sum.rows || sum.related?.within !== undefined,
+        ))
+    );
+  });
   const rankedDefaultsOrChainedTasks =
     original.surfaces.some((surface) => {
       const editor =
@@ -895,6 +911,13 @@ function surfaceManifestPayload(
     // behave like a browser for that sentence to hold.
     requiredRuntimeCapability: {
       capabilityId: 'northstar.runtime:capability.surface-manifest',
+      // 23: List figures beside a progress, sums over rows pointing at the
+      // listed record through a relation or over related rows whose own
+      // parent holds a value, and supplementary figures (ORDER-STAGES): the
+      // Sales orders List's To invoice and To collect. A reader that dropped
+      // them would count every order under To invoice -- the wrong rows under
+      // an exact-looking count -- or refuse the whole List to a principal
+      // denied an invoice read.
       // 22 (INTEGRATION; SALES-EXTRAS took 15 in parallel, which INVENTORY-PARITY
       // already held): ranked editor defaults (`tiers`), such as a customer's
       // price lists, and Tasks of up to twelve steps whose per-row steps read
@@ -958,149 +981,141 @@ function surfaceManifestPayload(
       // 9: picker eligibility and typed Task inputs. A reader that dropped
       // either would offer every party as a customer, or ask for free text
       // where a governed value is declared -- a wrong render, not a lesser one.
-      minimumVersion: rankedDefaultsOrChainedTasks
-        ? 22
-        : original.surfaces.some((surface) => {
-              const list =
-                'list' in surface
-                  ? (surface.list as SurfaceList | undefined)
-                  : undefined;
-              return (
-                list?.progress?.supply !== undefined ||
-                list?.views.some((view) => view.supply !== undefined) ===
-                  true ||
-                list?.rowActions?.some(
-                  (action) => action.when?.supply !== undefined,
-                ) === true
-              );
-            })
-          ? 21
+      minimumVersion: orderStages
+        ? 23
+        : rankedDefaultsOrChainedTasks
+          ? 22
           : original.surfaces.some((surface) => {
                 const list =
                   'list' in surface
                     ? (surface.list as SurfaceList | undefined)
                     : undefined;
-                const editor =
-                  'documentEditor' in surface
-                    ? (surface.documentEditor as
-                        SurfaceDocumentEditor | undefined)
-                    : undefined;
                 return (
-                  list?.searchChildren !== undefined ||
-                  list?.figures?.choices !== undefined ||
-                  list?.figures?.bands?.some((band) =>
-                    band.cases.some(
-                      (entry) =>
-                        entry.when !== undefined ||
-                        [entry.below, entry.atMost].some(
-                          (threshold) =>
-                            threshold !== undefined && 'figure' in threshold,
-                        ),
-                    ),
-                  ) === true ||
-                  [
-                    ...(editor?.headerFields ?? []),
-                    ...(editor?.lineFields ?? []),
-                  ].some(
-                    (field) => field.reference?.searchChildren !== undefined,
-                  ) ||
-                  compositions
-                    .get(surface.surfaceId)
-                    ?.actions.some((action) =>
-                      action.inputs.some((input) => input.excludeRecord),
-                    ) === true
+                  list?.progress?.supply !== undefined ||
+                  list?.views.some((view) => view.supply !== undefined) ===
+                    true ||
+                  list?.rowActions?.some(
+                    (action) => action.when?.supply !== undefined,
+                  ) === true
                 );
               })
-            ? 20
+            ? 21
             : original.surfaces.some((surface) => {
                   const list =
                     'list' in surface
                       ? (surface.list as SurfaceList | undefined)
                       : undefined;
-                  const form =
-                    'form' in surface
-                      ? (surface.form as SurfaceForm | undefined)
+                  const editor =
+                    'documentEditor' in surface
+                      ? (surface.documentEditor as
+                          SurfaceDocumentEditor | undefined)
                       : undefined;
                   return (
-                    form?.omit !== undefined ||
-                    [
-                      ...(list?.figures?.sums ?? []).map((sum) => sum.within),
-                      ...(list?.figures?.latest ?? []).map(
-                        (latest) => latest.within,
+                    list?.searchChildren !== undefined ||
+                    list?.figures?.choices !== undefined ||
+                    list?.figures?.bands?.some((band) =>
+                      band.cases.some(
+                        (entry) =>
+                          entry.when !== undefined ||
+                          [entry.below, entry.atMost].some(
+                            (threshold) =>
+                              threshold !== undefined && 'figure' in threshold,
+                          ),
                       ),
+                    ) === true ||
+                    [
+                      ...(editor?.headerFields ?? []),
+                      ...(editor?.lineFields ?? []),
                     ].some(
-                      (within) => within !== undefined && 'reference' in within,
-                    )
+                      (field) => field.reference?.searchChildren !== undefined,
+                    ) ||
+                    compositions
+                      .get(surface.surfaceId)
+                      ?.actions.some((action) =>
+                        action.inputs.some((input) => input.excludeRecord),
+                      ) === true
                   );
                 })
-              ? 19
-              : original.surfaces.some(
-                    (surface) =>
-                      'launcher' in surface && surface.launcher !== undefined,
-                  )
-                ? 18
-                : original.surfaces.some((surface) => {
-                      const list =
-                        'list' in surface
-                          ? (surface.list as SurfaceList | undefined)
-                          : undefined;
-                      return (
-                        ('form' in surface && surface.form !== undefined) ||
-                        list?.figures !== undefined ||
-                        list?.views.some((view) => view.band) === true
-                      );
-                    })
-                  ? 17
-                  : original.surfaces.some(
-                        (surface) =>
-                          'documentEditor' in surface &&
-                          (
-                            surface.documentEditor as
-                              SurfaceDocumentEditor | undefined
-                          )?.createValues !== undefined,
+              ? 20
+              : original.surfaces.some((surface) => {
+                    const list =
+                      'list' in surface
+                        ? (surface.list as SurfaceList | undefined)
+                        : undefined;
+                    const form =
+                      'form' in surface
+                        ? (surface.form as SurfaceForm | undefined)
+                        : undefined;
+                    return (
+                      form?.omit !== undefined ||
+                      [
+                        ...(list?.figures?.sums ?? []).map((sum) => sum.within),
+                        ...(list?.figures?.latest ?? []).map(
+                          (latest) => latest.within,
+                        ),
+                      ].some(
+                        (within) =>
+                          within !== undefined && 'reference' in within,
                       )
-                    ? 16
-                    : [...compositions.values()].some((value) =>
-                          value?.children.some((child) => child.fieldScope),
+                    );
+                  })
+                ? 19
+                : original.surfaces.some(
+                      (surface) =>
+                        'launcher' in surface && surface.launcher !== undefined,
+                    )
+                  ? 18
+                  : original.surfaces.some((surface) => {
+                        const list =
+                          'list' in surface
+                            ? (surface.list as SurfaceList | undefined)
+                            : undefined;
+                        return (
+                          ('form' in surface && surface.form !== undefined) ||
+                          list?.figures !== undefined ||
+                          list?.views.some((view) => view.band) === true
+                        );
+                      })
+                    ? 17
+                    : original.surfaces.some(
+                          (surface) =>
+                            'documentEditor' in surface &&
+                            (
+                              surface.documentEditor as
+                                SurfaceDocumentEditor | undefined
+                            )?.createValues !== undefined,
                         )
-                      ? 15
-                      : [...compositions.values()].some(
-                            (value) =>
-                              value !== undefined &&
-                              (value.presentation?.alerts !== undefined ||
-                                value.presentation?.progression !== undefined ||
-                                value.actions.some(
-                                  (action) =>
-                                    action.rows !== undefined ||
-                                    action.inputs.some(
-                                      (input) => input.perRow !== undefined,
-                                    ) ||
-                                    action.steps.some(
-                                      (step) => step.each !== undefined,
-                                    ) ||
-                                    (action.navigate?.record.source ===
-                                      'record' &&
-                                      relationIds.has(
-                                        action.navigate.record.field,
-                                      )),
-                                ) ||
-                                value.fields.some((column) =>
-                                  relationIds.has(column.field),
-                                )),
+                      ? 16
+                      : [...compositions.values()].some((value) =>
+                            value?.children.some((child) => child.fieldScope),
                           )
-                        ? 14
-                        : original.surfaces.some((surface) => {
-                              const list =
-                                'list' in surface
-                                  ? (surface.list as SurfaceList | undefined)
-                                  : undefined;
-                              return (
-                                list !== undefined &&
-                                (list.rowActions !== undefined ||
-                                  list.progress?.whenDenied !== undefined)
-                              );
-                            })
-                          ? 13
+                        ? 15
+                        : [...compositions.values()].some(
+                              (value) =>
+                                value !== undefined &&
+                                (value.presentation?.alerts !== undefined ||
+                                  value.presentation?.progression !==
+                                    undefined ||
+                                  value.actions.some(
+                                    (action) =>
+                                      action.rows !== undefined ||
+                                      action.inputs.some(
+                                        (input) => input.perRow !== undefined,
+                                      ) ||
+                                      action.steps.some(
+                                        (step) => step.each !== undefined,
+                                      ) ||
+                                      (action.navigate?.record.source ===
+                                        'record' &&
+                                        relationIds.has(
+                                          action.navigate.record.field,
+                                        )),
+                                  ) ||
+                                  value.fields.some((column) =>
+                                    relationIds.has(column.field),
+                                  )),
+                            )
+                          ? 14
                           : original.surfaces.some((surface) => {
                                 const list =
                                   'list' in surface
@@ -1108,127 +1123,141 @@ function surfaceManifestPayload(
                                     : undefined;
                                 return (
                                   list !== undefined &&
-                                  (list.progress !== undefined ||
-                                    list.views.some(
-                                      (view) => view.open || view.before,
-                                    ) ||
-                                    list.columns.some(
-                                      (column) => column.overdue,
-                                    ))
+                                  (list.rowActions !== undefined ||
+                                    list.progress?.whenDenied !== undefined)
                                 );
                               })
-                            ? 12
+                            ? 13
                             : original.surfaces.some((surface) => {
-                                  const editor =
-                                    'documentEditor' in surface
-                                      ? (surface.documentEditor as
-                                          SurfaceDocumentEditor | undefined)
+                                  const list =
+                                    'list' in surface
+                                      ? (surface.list as
+                                          SurfaceList | undefined)
                                       : undefined;
                                   return (
-                                    [
-                                      ...(editor?.headerFields ?? []),
-                                      ...(editor?.lineFields ?? []),
-                                    ].some(
-                                      (field) =>
-                                        field.defaultFrom ||
-                                        field.reference?.within ||
-                                        (field.presentation?.kind ===
-                                          'derived' &&
-                                          field.presentation.sourceByHeader),
-                                    ) ||
-                                    compositions
-                                      .get(surface.surfaceId)
-                                      ?.actions.some((action) =>
-                                        action.inputs.some(
-                                          (input) => input.eligibility,
-                                        ),
-                                      ) === true
+                                    list !== undefined &&
+                                    (list.progress !== undefined ||
+                                      list.views.some(
+                                        (view) => view.open || view.before,
+                                      ) ||
+                                      list.columns.some(
+                                        (column) => column.overdue,
+                                      ))
                                   );
                                 })
-                              ? 11
-                              : original.surfaces.some(
-                                    (surface) =>
-                                      'list' in surface && surface.list,
-                                  )
-                                ? 10
-                                : original.surfaces.some((surface) => {
-                                      const editor =
-                                        'documentEditor' in surface
-                                          ? (surface.documentEditor as
-                                              SurfaceDocumentEditor | undefined)
-                                          : undefined;
-                                      const composition = compositions.get(
-                                        surface.surfaceId,
-                                      );
-                                      return (
-                                        [
-                                          ...(editor?.headerFields ?? []),
-                                          ...(editor?.lineFields ?? []),
-                                        ].some(
-                                          (field) =>
-                                            field.reference?.eligibility,
-                                        ) ||
-                                        composition?.actions.some((action) =>
+                              ? 12
+                              : original.surfaces.some((surface) => {
+                                    const editor =
+                                      'documentEditor' in surface
+                                        ? (surface.documentEditor as
+                                            SurfaceDocumentEditor | undefined)
+                                        : undefined;
+                                    return (
+                                      [
+                                        ...(editor?.headerFields ?? []),
+                                        ...(editor?.lineFields ?? []),
+                                      ].some(
+                                        (field) =>
+                                          field.defaultFrom ||
+                                          field.reference?.within ||
+                                          (field.presentation?.kind ===
+                                            'derived' &&
+                                            field.presentation.sourceByHeader),
+                                      ) ||
+                                      compositions
+                                        .get(surface.surfaceId)
+                                        ?.actions.some((action) =>
                                           action.inputs.some(
-                                            (input) => input.presentation,
+                                            (input) => input.eligibility,
                                           ),
                                         ) === true
-                                      );
-                                    })
-                                  ? 9
-                                  : original.surfaces.some(
-                                        (surface) =>
-                                          'workspace' in surface ||
-                                          'documentEditor' in surface,
-                                      )
-                                    ? 8
-                                    : [...compositions.values()].some(
-                                          (value) =>
-                                            value?.actions.some(
-                                              (action) =>
-                                                action.presentation?.task,
-                                            ) ||
-                                            value?.children.some(
-                                              (child) =>
-                                                child.presentation
-                                                  ?.selectedActions,
+                                    );
+                                  })
+                                ? 11
+                                : original.surfaces.some(
+                                      (surface) =>
+                                        'list' in surface && surface.list,
+                                    )
+                                  ? 10
+                                  : original.surfaces.some((surface) => {
+                                        const editor =
+                                          'documentEditor' in surface
+                                            ? (surface.documentEditor as
+                                                | SurfaceDocumentEditor
+                                                | undefined)
+                                            : undefined;
+                                        const composition = compositions.get(
+                                          surface.surfaceId,
+                                        );
+                                        return (
+                                          [
+                                            ...(editor?.headerFields ?? []),
+                                            ...(editor?.lineFields ?? []),
+                                          ].some(
+                                            (field) =>
+                                              field.reference?.eligibility,
+                                          ) ||
+                                          composition?.actions.some((action) =>
+                                            action.inputs.some(
+                                              (input) => input.presentation,
                                             ),
+                                          ) === true
+                                        );
+                                      })
+                                    ? 9
+                                    : original.surfaces.some(
+                                          (surface) =>
+                                            'workspace' in surface ||
+                                            'documentEditor' in surface,
                                         )
-                                      ? 7
+                                      ? 8
                                       : [...compositions.values()].some(
                                             (value) =>
-                                              value?.presentation?.task ||
+                                              value?.actions.some(
+                                                (action) =>
+                                                  action.presentation?.task,
+                                              ) ||
                                               value?.children.some(
                                                 (child) =>
-                                                  child.sort?.length ||
-                                                  child.presentation?.compact,
+                                                  child.presentation
+                                                    ?.selectedActions,
                                               ),
                                           )
-                                        ? 6
+                                        ? 7
                                         : [...compositions.values()].some(
                                               (value) =>
-                                                value?.presentation ||
+                                                value?.presentation?.task ||
                                                 value?.children.some(
                                                   (child) =>
-                                                    child.presentation ||
-                                                    child.columns.some(
-                                                      (column) =>
-                                                        column.presentation,
-                                                    ),
-                                                ) ||
-                                                value?.actions.some(
-                                                  (action) =>
-                                                    action.presentation,
+                                                    child.sort?.length ||
+                                                    child.presentation?.compact,
                                                 ),
                                             )
-                                          ? 5
-                                          : composed
-                                            ? 4
-                                            : emitsFieldKinds
-                                              ? 3
-                                              : navigation
-                                                ? 2
-                                                : 1,
+                                          ? 6
+                                          : [...compositions.values()].some(
+                                                (value) =>
+                                                  value?.presentation ||
+                                                  value?.children.some(
+                                                    (child) =>
+                                                      child.presentation ||
+                                                      child.columns.some(
+                                                        (column) =>
+                                                          column.presentation,
+                                                      ),
+                                                  ) ||
+                                                  value?.actions.some(
+                                                    (action) =>
+                                                      action.presentation,
+                                                  ),
+                                              )
+                                            ? 5
+                                            : composed
+                                              ? 4
+                                              : emitsFieldKinds
+                                                ? 3
+                                                : navigation
+                                                  ? 2
+                                                  : 1,
     },
   };
 }
@@ -1645,7 +1674,10 @@ function agentFigures(figures: SurfaceListFigures) {
     sums: figures.sums.map((sum) => ({
       figureId: sum.figureId,
       rows: {
-        matchFieldId: sum.rows.match,
+        // By a text field, or through the rows' relation (ORDER-STAGES).
+        ...('relation' in sum.rows
+          ? { matchRelationId: sum.rows.relation }
+          : { matchFieldId: sum.rows.match }),
         queryId: sum.rows.query.targetId,
         ...(sum.rows.quantity ? { quantityFieldId: sum.rows.quantity } : {}),
       },
@@ -1656,6 +1688,9 @@ function agentFigures(figures: SurfaceListFigures) {
               fieldId: sum.related.quantity,
               queryId: sum.related.query.targetId,
               relationId: sum.related.relation,
+              ...(sum.related.within
+                ? { within: within(sum.related.within) }
+                : {}),
             },
           }
         : {}),
@@ -1711,6 +1746,9 @@ function agentFigures(figures: SurfaceListFigures) {
           })),
         }
       : {}),
+    // Supplementary figures (ORDER-STAGES): a caller the policy denies them
+    // asks again without `figures`, for every view that keeps no band.
+    ...(figures.whenDenied ? { whenDenied: figures.whenDenied } : {}),
   };
 }
 

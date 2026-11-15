@@ -47,6 +47,11 @@ export const COMMERCIAL_READ_MODEL_OUTPUTS = Object.freeze({
     'order_tax',
     'order_total',
     'order_to_invoice',
+    // Where the order stands (Order to cash): on a confirmed order, what is
+    // left to ship -- ordered less shipped, as the List's To ship counts it --
+    // and what its live invoices still owe.
+    'order_to_ship',
+    'order_balance_due',
   ],
   // A purchase line also states what has arrived and what is still to arrive
   // (PURCHASING-PARITY), from the receiving projection.
@@ -276,6 +281,18 @@ export function salesWorkspace(namespace: string): Record<string, unknown> {
     lifecycle('equals', state);
   const notInState = (state: Parameters<typeof lifecycle>[1]) =>
     lifecycle('notEquals', state);
+  // An order figure of the commercial read model: something left, or exactly
+  // nothing ("0", as the read model states zero).
+  const something = (metric: string) => ({
+    value: record(id('metric', metric)),
+    operator: 'positive',
+    compare: null,
+  });
+  const nothing = (metric: string) => ({
+    value: record(id('metric', metric)),
+    operator: 'equals',
+    compare: '0',
+  });
   const active = {
     value: selected(id('metric', 'remaining')),
     operator: 'positive',
@@ -532,7 +549,12 @@ export function salesWorkspace(namespace: string): Record<string, unknown> {
           columnId: id('column', 'short'),
         },
       ],
-      // Order to cash: where this order stands and what to do next.
+      // Order to cash: where this order stands and what to do next. A
+      // confirmed order is fulfilling while anything is left to ship,
+      // invoicing once it has all shipped, collecting while an invoice is
+      // owed (alongside shipping, when it ships in parts), then ready to
+      // close. A figure that cannot be stated (null) holds no condition, so
+      // the order reads as fulfilling rather than further along than it is.
       progression: {
         title: 'Order to cash',
         steps: [
@@ -545,28 +567,45 @@ export function salesWorkspace(namespace: string): Record<string, unknown> {
           {
             label: 'Fulfillment',
             current: [inState('released')],
-            complete: [inState('closed')],
+            complete: [notInState('draft'), nothing('order_to_ship')],
             stopped: [inState('cancelled')],
             documents: shipments,
           },
           {
             label: 'Invoicing',
-            current: [inState('released')],
-            complete: [inState('closed')],
-            // Shipped quantity is waiting to be invoiced.
-            attention: [
-              {
-                value: record(id('metric', 'order_to_invoice')),
-                operator: 'positive',
-                compare: null,
-              },
+            current: [inState('released'), nothing('order_to_ship')],
+            complete: [
+              notInState('draft'),
+              nothing('order_to_ship'),
+              nothing('order_to_invoice'),
             ],
+            // Shipped quantity is waiting to be invoiced.
+            attention: [something('order_to_invoice')],
             stopped: [inState('cancelled')],
             documents: invoices,
           },
           {
+            label: 'Payment',
+            // Money is owed on an issued invoice, even while more of the
+            // order is still to ship or invoice.
+            current: [something('order_balance_due')],
+            complete: [
+              notInState('draft'),
+              nothing('order_to_ship'),
+              nothing('order_to_invoice'),
+              nothing('order_balance_due'),
+            ],
+            stopped: [inState('cancelled')],
+          },
+          {
             label: 'Closed',
-            current: [],
+            // Shipped, invoiced and paid: the order is ready to close.
+            current: [
+              inState('released'),
+              nothing('order_to_ship'),
+              nothing('order_to_invoice'),
+              nothing('order_balance_due'),
+            ],
             complete: [inState('closed')],
             stopped: [inState('cancelled')],
           },
